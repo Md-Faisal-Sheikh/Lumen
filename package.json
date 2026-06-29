@@ -1,0 +1,18 @@
+{
+  "name": "lumen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lumen — a collaborative online vibe-coding platform. Describe an app in plain words; Lumen writes and runs it live, with your whole team in the room.",
+  "workspaces": ["server", "client"],
+  "scripts": {
+    "setup": "npm install && npm --workspace server run prisma:generate && npm --workspace server run prisma:migrate",
+    "dev": "concurrently -n server,client -c magenta,cyan \"npm --workspace server run dev\" \"npm --workspace client run dev\"",
+    "build": "npm --workspace client run build",
+    "start": "npm --workspace server run prisma:deploy && cross-env NODE_ENV=production npm --workspace server run start",
+    "typecheck": "npm --workspace server run typecheck && npm --workspace client run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3"
+  }
+}

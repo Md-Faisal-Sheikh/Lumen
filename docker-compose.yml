@@ -1,0 +1,25 @@
+services:
+  lumen:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-string}
+      DATABASE_URL: "file:./prisma/dev.db"
+      AI_PROVIDER: ${AI_PROVIDER:-groq}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+    volumes:
+      - lumen-db:/app/server/prisma
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+# For a real production deployment, replace the SQLite volume above with a
+# Postgres service and set DATABASE_URL accordingly (and change the Prisma
+# datasource provider to "postgresql").
+volumes:
+  lumen-db:

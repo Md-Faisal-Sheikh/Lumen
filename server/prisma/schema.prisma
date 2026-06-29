@@ -1,0 +1,63 @@
+// Prisma schema — SQLite by default for zero-config local dev.
+// To use Postgres in production: set provider = "postgresql" and update DATABASE_URL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String          @id @default(cuid())
+  email         String          @unique
+  passwordHash  String
+  name          String
+  color         String
+  createdAt     DateTime        @default(now())
+  memberships   ProjectMember[]
+  ownedProjects Project[]       @relation("owner")
+}
+
+model Project {
+  id        String          @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User            @relation("owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  members   ProjectMember[]
+  versions  Version[]
+  doc       Doc?
+}
+
+model ProjectMember {
+  id        String  @id @default(cuid())
+  projectId String
+  userId    String
+  role      String  @default("editor") // "owner" | "editor"
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+}
+
+// Explicit snapshots saved on every successful build (version history).
+model Version {
+  id        String   @id @default(cuid())
+  projectId String
+  prompt    String
+  html      String
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// Binary Yjs document state, persisted by the Hocuspocus database extension.
+model Doc {
+  projectId String   @id
+  data      Bytes
+  updatedAt DateTime @updatedAt
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
