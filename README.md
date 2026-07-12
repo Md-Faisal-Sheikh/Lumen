@@ -154,4 +154,4 @@ lumen/
 
 ## License
 
-MIT — use it, fork it, build on it.
+MIT
