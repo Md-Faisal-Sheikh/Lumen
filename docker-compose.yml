@@ -8,9 +8,9 @@ services:
       NODE_ENV: production
       JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-string}
       DATABASE_URL: "file:./prisma/dev.db"
-      AI_PROVIDER: ${AI_PROVIDER:-groq}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      AI_PROVIDER: ${AI_PROVIDER:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-nvidia/nemotron-3-ultra-550b-a55b:free}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
     volumes:

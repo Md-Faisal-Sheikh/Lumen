@@ -31,9 +31,9 @@ export async function streamBuild(prompt: string, currentCode: string | undefine
       return streamGemini(user, onDelta)
     case 'ollama':
       return streamOllama(user, onDelta)
-    case 'groq':
+    case 'openrouter':
     default:
-      return streamGroq(user, onDelta)
+      return streamOpenRouter(user, onDelta)
   }
 }
 
@@ -86,14 +86,19 @@ async function readSSE(
   return full
 }
 
-// ── Groq (OpenAI-compatible, free tier) ─────────────────────────────
-async function streamGroq(user: string, onDelta: OnDelta): Promise<string> {
-  if (!env.GROQ_API_KEY) throw new Error('GROQ_API_KEY is not set. Add a free key from console.groq.com/keys')
-  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+// ── OpenRouter (OpenAI-compatible, free tier) ───────────────────────
+async function streamOpenRouter(user: string, onDelta: OnDelta): Promise<string> {
+  if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set. Add a key from openrouter.ai/keys')
+  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'http://localhost:5173',
+      'X-Title': 'Lumen',
+    },
     body: JSON.stringify({
-      model: env.GROQ_MODEL,
+      model: env.OPENROUTER_MODEL,
       stream: true,
       temperature: 0.6,
       max_tokens: 8000,
@@ -103,7 +108,7 @@ async function streamGroq(user: string, onDelta: OnDelta): Promise<string> {
       ],
     }),
   })
-  if (!r.ok || !r.body) throw new Error(`Groq error ${r.status}: ${await safeText(r)}`)
+  if (!r.ok || !r.body) throw new Error(`OpenRouter error ${r.status}: ${await safeText(r)}`)
   return readSSE(r.body, (j) => {
     const d = j?.choices?.[0]?.delta?.content
     return typeof d === 'string' ? d : ''

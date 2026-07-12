@@ -1,6 +1,6 @@
 import 'dotenv/config'
 
-type Provider = 'groq' | 'gemini' | 'ollama'
+type Provider = 'openrouter' | 'gemini' | 'ollama'
 
 export const env = {
   PORT: Number(process.env.PORT ?? 4000),
@@ -8,10 +8,10 @@ export const env = {
   JWT_SECRET: process.env.JWT_SECRET ?? 'dev-insecure-secret-change-me',
   CLIENT_ORIGIN: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
 
-  AI_PROVIDER: (process.env.AI_PROVIDER ?? 'groq') as Provider,
+  AI_PROVIDER: (process.env.AI_PROVIDER ?? 'openrouter') as Provider,
 
-  GROQ_API_KEY: process.env.GROQ_API_KEY ?? '',
-  GROQ_MODEL: process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+  OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ?? '',
+  OPENROUTER_MODEL: process.env.OPENROUTER_MODEL ?? 'nvidia/nemotron-3-ultra-550b-a55b:free',
 
   GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? '',
   GEMINI_MODEL: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash',

@@ -27,7 +27,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 | Client | React 18 + Vite + TypeScript | open-source |
 | Editor | CodeMirror 6 + `y-codemirror.next` | collaborative editing + in-editor cursors |
 | Real-time | **Yjs** CRDT over self-hosted **Hocuspocus** WebSocket server | you host it; no SaaS |
-| AI engine | **Groq** · **Google Gemini** · **Ollama** (pluggable) | all have free tiers; Ollama is fully local |
+| AI engine | **OpenRouter** · **Google Gemini** · **Ollama** (pluggable) | all have free tiers; Ollama is fully local |
 | API | Node + Express | open-source |
 | Auth | JWT + bcrypt (local) | no external auth provider |
 | Database | Prisma + **SQLite** (swap to Postgres) | file-based, zero-config |
@@ -37,7 +37,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 │  React client │ ───────────────────────────────▶│  Express API              │
 │  CodeMirror   │                                  │   ├─ JWT auth (bcrypt)    │
 │  Yjs document │◀──────── WebSocket (Yjs) ───────▶│   ├─ Projects / versions  │──▶ free AI
-│  iframe preview│   shared code · chat · cursors  │   └─ Hocuspocus collab    │   (Groq/Gemini/
+│  iframe preview│   shared code · chat · cursors  │   └─ Hocuspocus collab    │   (OpenRouter/Gemini/
 └──────────────┘                                  └──────────────┬────────────┘    Ollama)
                                                                  │ Prisma
                                                           ┌──────▼──────┐
@@ -51,7 +51,7 @@ The AI key lives **only on the server** — the browser never sees it. The build
 
 - **Node.js 20+**
 - One free AI provider (pick whichever you like):
-  - **Groq** *(default, fast)* — get a free key at <https://console.groq.com/keys>
+  - **OpenRouter** *(default)* — get a free key at <https://openrouter.ai/keys>
   - **Google Gemini** — get a free key at <https://aistudio.google.com/apikey>
   - **Ollama** *(fully local, no key)* — install from <https://ollama.com>, then `ollama pull qwen2.5-coder:7b`
 
@@ -61,7 +61,7 @@ The AI key lives **only on the server** — the browser never sees it. The build
 # 1. Configure the server
 cp .env.example server/.env
 #    then open server/.env and set JWT_SECRET + your provider key
-#    (e.g. AI_PROVIDER=groq and GROQ_API_KEY=...)
+#    (e.g. AI_PROVIDER=openrouter and OPENROUTER_API_KEY=...)
 
 # 2. Install, generate the Prisma client, and create the database
 npm run setup
@@ -93,8 +93,8 @@ Tap the **mic** in the composer and speak — your words are transcribed into th
 | `CLIENT_ORIGIN` | `http://localhost:5173` | for CORS in dev |
 | `JWT_SECRET` | — | **set a long random string** |
 | `DATABASE_URL` | `file:./dev.db` | SQLite by default |
-| `AI_PROVIDER` | `groq` | `groq` \| `gemini` \| `ollama` |
-| `GROQ_API_KEY` / `GROQ_MODEL` | — / `llama-3.3-70b-versatile` | |
+| `AI_PROVIDER` | `openrouter` | `openrouter` \| `gemini` \| `ollama` |
+| `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | — / `nvidia/nemotron-3-ultra-550b-a55b:free` | |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | — / `gemini-2.0-flash` | |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `qwen2.5-coder:7b` | |
 
@@ -111,7 +111,7 @@ docker compose up --build
 This builds the client, runs migrations, and serves the API **and** the compiled client on one port (4000). Pass your keys via env, e.g.:
 
 ```bash
-JWT_SECRET=... GROQ_API_KEY=... docker compose up --build
+JWT_SECRET=... OPENROUTER_API_KEY=... docker compose up --build
 ```
 
 ### Deploy to a free tier

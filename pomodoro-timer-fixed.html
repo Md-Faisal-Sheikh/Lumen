@@ -1,0 +1,565 @@
+<!-- SUMMARY: A fully functional Pomodoro timer with working buttons for focus sessions, breaks, and settings -->
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pomodoro Timer</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 8px;
+            border-radius: 12px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.6);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-transform: capitalize;
+        }
+
+        .tab:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, #FF6B6B 0%, #FF8C42 100%);
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+        }
+
+        .timer-display {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .circular-timer {
+            width: 280px;
+            height: 280px;
+            margin: 0 auto 30px;
+            position: relative;
+        }
+
+        svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .progress-circle {
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.1);
+            stroke-width: 8;
+            stroke-linecap: round;
+        }
+
+        .progress-circle-fill {
+            fill: none;
+            stroke: url(#gradient);
+            stroke-width: 8;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.3s linear;
+        }
+
+        .timer-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            width: 100%;
+        }
+
+        .time {
+            font-size: 72px;
+            font-weight: 700;
+            color: #fff;
+            line-height: 1;
+            margin-bottom: 8px;
+        }
+
+        .time-label {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.6);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 20px;
+            justify-content: center;
+        }
+
+        button {
+            padding: 12px 32px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #FF6B6B 0%, #FF8C42 100%);
+            color: #fff;
+            padding: 14px 40px;
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.8);
+            width: 50px;
+            height: 50px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 18px;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: scale(1.05);
+        }
+
+        .btn-secondary:active {
+            transform: scale(0.98);
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #FF6B6B;
+        }
+
+        .settings-panel {
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            display: none;
+        }
+
+        .settings-panel.active {
+            display: block;
+        }
+
+        .setting {
+            margin-bottom: 16px;
+        }
+
+        .setting-label {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .setting input {
+            width: 100%;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: #fff;
+            font-size: 13px;
+        }
+
+        .setting input:focus {
+            outline: none;
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 30px 20px;
+            }
+
+            .time {
+                font-size: 56px;
+            }
+
+            .circular-timer {
+                width: 220px;
+                height: 220px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="title">🍅 Pomodoro Timer</div>
+            <div class="subtitle">Stay focused, stay productive</div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" data-mode="focus">Focus</button>
+            <button class="tab" data-mode="short-break">Short Break</button>
+            <button class="tab" data-mode="long-break">Long Break</button>
+        </div>
+
+        <div class="timer-display">
+            <div class="circular-timer">
+                <svg viewBox="0 0 300 300">
+                    <defs>
+                        <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#FF6B6B;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#FF8C42;stop-opacity:1" />
+                        </linearGradient>
+                    </defs>
+                    <circle class="progress-circle" cx="150" cy="150" r="140"></circle>
+                    <circle class="progress-circle-fill" id="progressCircle" cx="150" cy="150" r="140"></circle>
+                </svg>
+                <div class="timer-text">
+                    <div class="time" id="timerDisplay">25:00</div>
+                    <div class="time-label" id="modeLabel">Focus Time</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn-secondary" id="resetBtn" title="Reset Timer">↻</button>
+            <button class="btn-primary" id="startBtn">Start</button>
+            <button class="btn-secondary" id="pauseBtn" title="Pause Timer" style="display: none;">⏸</button>
+        </div>
+
+        <div class="settings-panel" id="settingsPanel">
+            <div class="setting">
+                <label class="setting-label">Focus Time (minutes)</label>
+                <input type="number" id="focusTime" min="1" max="60" value="25">
+            </div>
+            <div class="setting">
+                <label class="setting-label">Short Break (minutes)</label>
+                <input type="number" id="shortBreakTime" min="1" max="30" value="5">
+            </div>
+            <div class="setting">
+                <label class="setting-label">Long Break (minutes)</label>
+                <input type="number" id="longBreakTime" min="1" max="60" value="15">
+            </div>
+            <button class="btn-primary" id="saveSettingsBtn" style="width: 100%; margin-top: 16px;">Save Settings</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-label">Sessions Today</div>
+                <div class="stat-value" id="sessionsCount">0</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Total Focus</div>
+                <div class="stat-value" id="totalFocus">0h</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Streak</div>
+                <div class="stat-value" id="streak">0</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State management
+        let state = {
+            mode: 'focus',
+            isRunning: false,
+            timeRemaining: 25 * 60,
+            totalTime: 25 * 60,
+            sessions: 0,
+            totalFocusTime: 0,
+            settings: {
+                focusTime: 25,
+                shortBreakTime: 5,
+                longBreakTime: 15
+            }
+        };
+
+        let timerInterval = null;
+
+        // DOM elements
+        const timerDisplay = document.getElementById('timerDisplay');
+        const modeLabel = document.getElementById('modeLabel');
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const progressCircle = document.getElementById('progressCircle');
+        const tabs = document.querySelectorAll('.tab');
+        const settingsPanel = document.getElementById('settingsPanel');
+        const sessionsCount = document.getElementById('sessionsCount');
+        const totalFocus = document.getElementById('totalFocus');
+        const streak = document.getElementById('streak');
+
+        // Mode labels
+        const modeLabels = {
+            'focus': 'Focus Time',
+            'short-break': 'Short Break',
+            'long-break': 'Long Break'
+        };
+
+        // Initialize
+        loadSettings();
+        updateDisplay();
+        attachEventListeners();
+
+        function attachEventListeners() {
+            startBtn.addEventListener('click', startTimer);
+            pauseBtn.addEventListener('click', pauseTimer);
+            resetBtn.addEventListener('click', resetTimer);
+
+            tabs.forEach(tab => {
+                tab.addEventListener('click', () => switchMode(tab.dataset.mode));
+            });
+
+            // Settings
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 's' || e.key === 'S') {
+                    settingsPanel.classList.toggle('active');
+                }
+            });
+
+            document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
+        }
+
+        function switchMode(mode) {
+            if (state.isRunning) return;
+            
+            state.mode = mode;
+            const modeTimeMap = {
+                'focus': state.settings.focusTime,
+                'short-break': state.settings.shortBreakTime,
+                'long-break': state.settings.longBreakTime
+            };
+            
+            state.timeRemaining = modeTimeMap[mode] * 60;
+            state.totalTime = state.timeRemaining;
+            
+            tabs.forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
+            
+            updateDisplay();
+        }
+
+        function startTimer() {
+            if (state.isRunning) return;
+            
+            state.isRunning = true;
+            startBtn.style.display = 'none';
+            pauseBtn.style.display = 'inline-flex';
+            
+            timerInterval = setInterval(() => {
+                state.timeRemaining--;
+                
+                if (state.timeRemaining <= 0) {
+                    completeSession();
+                } else {
+                    updateDisplay();
+                }
+            }, 1000);
+        }
+
+        function pauseTimer() {
+            state.isRunning = false;
+            clearInterval(timerInterval);
+            startBtn.style.display = 'inline-block';
+            pauseBtn.style.display = 'none';
+        }
+
+        function resetTimer() {
+            clearInterval(timerInterval);
+            state.isRunning = false;
+            
+            const modeTimeMap = {
+                'focus': state.settings.focusTime,
+                'short-break': state.settings.shortBreakTime,
+                'long-break': state.settings.longBreakTime
+            };
+            
+            state.timeRemaining = modeTimeMap[state.mode] * 60;
+            state.totalTime = state.timeRemaining;
+            
+            startBtn.style.display = 'inline-block';
+            pauseBtn.style.display = 'none';
+            
+            updateDisplay();
+        }
+
+        function completeSession() {
+            clearInterval(timerInterval);
+            state.isRunning = false;
+            
+            if (state.mode === 'focus') {
+                state.sessions++;
+                state.totalFocusTime += state.settings.focusTime;
+                streak.textContent = state.sessions;
+                sessionsCount.textContent = state.sessions;
+                totalFocus.textContent = Math.floor(state.totalFocusTime / 60) + 'h ' + (state.totalFocusTime % 60) + 'm';
+            }
+            
+            // Play notification sound
+            playNotification();
+            
+            // Auto-switch to break
+            if (state.mode === 'focus') {
+                switchMode('short-break');
+            } else {
+                switchMode('focus');
+            }
+            
+            startBtn.style.display = 'inline-block';
+            pauseBtn.style.display = 'none';
+            alert('Session complete! 🎉');
+        }
+
+        function updateDisplay() {
+            const minutes = Math.floor(state.timeRemaining / 60);
+            const seconds = state.timeRemaining % 60;
+            timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            modeLabel.textContent = modeLabels[state.mode];
+            
+            // Update progress circle
+            const circumference = 2 * Math.PI * 140;
+            const progress = (state.timeRemaining / state.totalTime) * circumference;
+            progressCircle.style.strokeDasharray = `${progress} ${circumference}`;
+        }
+
+        function playNotification() {
+            // Create a simple beep sound using Web Audio API
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.value = 800;
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.5);
+        }
+
+        function saveSettings() {
+            state.settings.focusTime = parseInt(document.getElementById('focusTime').value);
+            state.settings.shortBreakTime = parseInt(document.getElementById('shortBreakTime').value);
+            state.settings.longBreakTime = parseInt(document.getElementById('longBreakTime').value);
+            
+            localStorage.setItem('pomodoroSettings', JSON.stringify(state.settings));
+            resetTimer();
+            settingsPanel.classList.remove('active');
+            alert('Settings saved! ✓');
+        }
+
+        function loadSettings() {
+            const saved = localStorage.getItem('pomodoroSettings');
+            if (saved) {
+                state.settings = JSON.parse(saved);
+                document.getElementById('focusTime').value = state.settings.focusTime;
+                document.getElementById('shortBreakTime').value = state.settings.shortBreakTime;
+                document.getElementById('longBreakTime').value = state.settings.longBreakTime;
+            }
+            
+            state.timeRemaining = state.settings.focusTime * 60;
+            state.totalTime = state.timeRemaining;
+        }
+
+        // Initialize progress circle
+        updateDisplay();
+    </script>
+</body>
+</html>
