@@ -3,7 +3,7 @@ import * as Y from 'yjs'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import { api, getToken, WS_URL, API_URL, type ProjectSummary } from './api'
 import { useAuth } from './auth'
-import { useYMap, useYMapKeys } from './yhooks'
+import { useYMap, useYMapKeys, useYTextNonEmpty } from './yhooks'
 import { toast } from './toast'
 import { speak, stopSpeaking, speechOutputSupported } from './speech'
 import { assemblePreview, createBuildWriter, INDEX_FILE, normalizePath, serializeWorkspace, starterContent } from './files'
@@ -13,6 +13,19 @@ import { PreviewPane } from './components/PreviewPane'
 import { FileExplorer } from './components/FileExplorer'
 
 const uid = () => Math.random().toString(36).slice(2, 10)
+
+// Panel layout: explorer and chat have draggable widths; the workspace flexes.
+const PANELS_KEY = 'lumen_panels'
+// Number.isFinite (not ||) so a mid-drag width of exactly 0 clamps to the floor
+// instead of snapping back to the default for a frame.
+const finite = (v: unknown, fallback: number) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fallback
+}
+const clampPanels = (p: { explorer?: unknown; conv?: unknown }) => ({
+  explorer: Math.min(640, Math.max(96, finite(p?.explorer, 232))),
+  conv: Math.min(820, Math.max(240, finite(p?.conv, 380))),
+})
 const projectFromUrl = () => new URLSearchParams(location.search).get('p')
 function setUrlProject(id: string) {
   const u = new URL(location.href)
@@ -120,7 +133,13 @@ function Room({
   const building = !!meta.building
 
   const fileKeys = useYMapKeys(yfiles)
-  const files = useMemo(() => [INDEX_FILE, ...fileKeys.filter((k) => k !== INDEX_FILE)], [fileKeys])
+  // index.html only shows in the explorer once something has been generated
+  // (or a collaborator created other files) — a fresh project starts empty.
+  const hasIndex = useYTextNonEmpty(ytext)
+  const files = useMemo(() => {
+    const rest = fileKeys.filter((k) => k !== INDEX_FILE)
+    return hasIndex || rest.length > 0 ? [INDEX_FILE, ...rest] : rest
+  }, [fileKeys, hasIndex])
   const [activeFile, setActiveFile] = useState(INDEX_FILE)
 
   const [previewCode, setPreviewCode] = useState('')
@@ -146,13 +165,19 @@ function Room({
   const assemble = () => assemblePreview(ytext.toString(), filesSnapshot())
 
   // Identify ourselves to other people in the room (drives cursors + presence).
+  // Re-announces on profile edits, so keep it separate from the teardown below —
+  // a user change must never destroy the live connection.
   useEffect(() => {
     provider.awareness?.setLocalStateField('user', { name: user!.name, color: user!.color, id: user!.id })
-    return () => {
+  }, [provider, user])
+
+  useEffect(
+    () => () => {
       provider.destroy()
       ydoc.destroy()
-    }
-  }, [provider, ydoc, user])
+    },
+    [provider, ydoc]
+  )
 
   // Show persisted code once the document has synced from the server.
   useEffect(() => {
@@ -184,8 +209,9 @@ function Room({
   }
 
   // ── File operations (all through Yjs, so the whole room stays in sync). ──
+  // index.html is part of the path universe even while hidden from the explorer.
   const collision = (path: string) =>
-    files.find((f) => f !== path && (f.startsWith(path + '/') || path.startsWith(f + '/')))
+    [INDEX_FILE, ...files].find((f) => f !== path && (f.startsWith(path + '/') || path.startsWith(f + '/')))
 
   const createFile = (input: string) => {
     const path = normalizePath(input)
@@ -193,7 +219,7 @@ function Room({
       toast('Use a simple path with an extension, like styles/theme.css')
       return
     }
-    if (files.includes(path)) {
+    if (path === INDEX_FILE || files.includes(path)) {
       setActiveFile(path)
       setTab('code')
       return
@@ -387,6 +413,35 @@ function Room({
     })
   }
 
+  // ── Resizable panels: drag the splitters; sizes persist across sessions. ──
+  const [panels, setPanels] = useState(() => {
+    try {
+      return clampPanels(JSON.parse(localStorage.getItem(PANELS_KEY) || '{}'))
+    } catch {
+      return clampPanels({})
+    }
+  })
+  useEffect(() => {
+    localStorage.setItem(PANELS_KEY, JSON.stringify(panels))
+  }, [panels])
+
+  const dragRef = useRef<{ which: 'explorer' | 'conv'; startX: number; startW: number } | null>(null)
+  const startDrag = (which: 'explorer' | 'conv') => (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    // Capture keeps the drag alive even over the preview iframe.
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = { which, startX: e.clientX, startW: panels[which] }
+  }
+  const moveDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d) return
+    const dx = e.clientX - d.startX
+    setPanels((prev) => clampPanels({ ...prev, [d.which]: d.which === 'explorer' ? d.startW + dx : d.startW - dx }))
+  }
+  const endDrag = () => {
+    dragRef.current = null
+  }
+
   const projectName = projects.find((p) => p.id === projectId)?.name ?? 'Project'
 
   return (
@@ -403,7 +458,12 @@ function Room({
         onToggleVoice={toggleVoice}
         voiceOutSupported={speechOutputSupported()}
       />
-      <div className="main">
+      {/* Widths flow through CSS variables (not an inline grid template) so the
+          responsive breakpoints in styles.css can still restructure the grid. */}
+      <div
+        className="main"
+        style={{ '--explorer-w': `${panels.explorer}px`, '--conv-w': `${panels.conv}px` } as React.CSSProperties}
+      >
         <FileExplorer
           projectName={projectName}
           files={files}
@@ -412,6 +472,16 @@ function Room({
           onCreate={createFile}
           onRename={renameFile}
           onDelete={deleteFile}
+        />
+        <div
+          className="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize file explorer"
+          onPointerDown={startDrag('explorer')}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
         />
         <PreviewPane
           tab={tab}
@@ -423,6 +493,16 @@ function Room({
           activeText={textFor(activeFile)}
           awareness={provider.awareness}
           onRun={runPreview}
+        />
+        <div
+          className="splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat panel"
+          onPointerDown={startDrag('conv')}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
         />
         <Conversation projectId={projectId} messages={ychat} meta={ymeta} onBuild={runBuild} />
       </div>

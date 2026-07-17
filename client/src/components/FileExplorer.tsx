@@ -69,9 +69,7 @@ export function FileExplorer({
         <span className="tw" />
         <FileIcon className={`ti ${extClass(node.name)}`} width={15} height={15} />
         <span className="tname">{node.name}</span>
-        {isIndex ? (
-          <span className="tbadge">entry</span>
-        ) : (
+        {!isIndex && (
           <span className="row-actions">
             <button
               className="ract"
@@ -135,6 +133,9 @@ export function FileExplorer({
           </div>
         )}
         {tree.map((node) => renderNode(node, 0))}
+        {files.length === 0 && !creating && (
+          <div className="exp-empty">No files yet — describe your app in the chat and Lumen will create them here.</div>
+        )}
       </div>
     </aside>
   )

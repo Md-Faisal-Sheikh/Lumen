@@ -3,14 +3,7 @@ import { Send, Mic } from '../icons'
 import { useDictation } from '../speech'
 import { toast } from '../toast'
 
-const EXAMPLES = [
-  'A pomodoro timer with a circular progress ring',
-  'A neon snake game I can play with arrow keys',
-  'A landing page for a coffee subscription',
-  'A markdown notepad with live preview',
-]
-
-export function Composer({ onBuild, building, showExamples }: { onBuild: (prompt: string) => void; building: boolean; showExamples: boolean }) {
+export function Composer({ onBuild, building }: { onBuild: (prompt: string) => void; building: boolean }) {
   const [value, setValue] = useState('')
   const ref = useRef<HTMLTextAreaElement>(null)
 
@@ -49,15 +42,6 @@ export function Composer({ onBuild, building, showExamples }: { onBuild: (prompt
 
   return (
     <div className="composer">
-      {showExamples && (
-        <div className="chips" style={{ marginBottom: 12 }}>
-          {EXAMPLES.map((ex) => (
-            <button key={ex} className="chip" onClick={() => !building && onBuild(ex)}>
-              {ex}
-            </button>
-          ))}
-        </div>
-      )}
       <div className={`composer-box ${listening ? 'listening' : ''}`}>
         <textarea
           ref={ref}

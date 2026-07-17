@@ -64,6 +64,8 @@ export const api = {
   login: (body: { email: string; password: string }) =>
     req<{ token: string; user: PublicUser }>('/api/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   me: () => req<{ user: PublicUser }>('/api/auth/me'),
+  updateMe: (body: { name?: string; color?: string }) =>
+    req<{ user: PublicUser }>('/api/auth/me', { method: 'PATCH', body: JSON.stringify(body) }),
   projects: () => req<{ projects: ProjectSummary[] }>('/api/projects'),
   createProject: (name: string) => req<{ project: ProjectSummary }>('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }),
   project: (id: string) => req<{ project: any }>(`/api/projects/${id}`),
@@ -77,10 +79,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ projectId, messages, title }),
     }),
-  autosaveChat: (projectId: string, messages: any[]) =>
+  autosaveChat: (projectId: string, messages: any[], init?: { keepalive?: boolean }) =>
     req<{ session: { id: string; title: string; updatedAt: string } }>('/api/chats/autosave', {
       method: 'PUT',
       body: JSON.stringify({ projectId, messages }),
+      ...(init?.keepalive ? { keepalive: true } : {}),
     }),
   chat: (id: string) => req<{ session: ChatSessionDetail }>(`/api/chats/${id}`),
   deleteChat: (id: string) => req<{ ok: true }>(`/api/chats/${id}`, { method: 'DELETE' }),

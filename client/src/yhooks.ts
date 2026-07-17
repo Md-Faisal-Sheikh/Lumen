@@ -38,6 +38,19 @@ export function useYMapKeys(map: Y.Map<any>): string[] {
   return keys
 }
 
+// Whether a Y.Text currently has any content (re-renders only on the boolean flip
+// being observed, cheap enough to observe every edit).
+export function useYTextNonEmpty(text: Y.Text): boolean {
+  const [nonEmpty, setNonEmpty] = useState(() => text.length > 0)
+  useEffect(() => {
+    const update = () => setNonEmpty(text.length > 0)
+    text.observe(update)
+    update()
+    return () => text.unobserve(update)
+  }, [text])
+  return nonEmpty
+}
+
 export interface AwarenessPeer {
   id: number
   user?: { name: string; color: string; id: string }

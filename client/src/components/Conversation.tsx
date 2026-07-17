@@ -55,29 +55,76 @@ export function Conversation({
   // Auto-save: whenever the conversation changes (and no build is mid-stream),
   // debounce briefly and upsert this user's live session for the project.
   // A failed attempt quietly retries; the next change also re-triggers it.
+  // saveSeq orders overlapping requests: a response that isn't from the newest
+  // request is ignored, so a slow stale save can't mark newer data as saved.
+  // (The server also refuses payloads with fewer messages than it holds.)
+  const saveSeq = useRef(0)
+  const listRef = useRef(list)
+  listRef.current = list
+
   useEffect(() => {
     if (building || list.length === 0) return
     const payload = JSON.stringify(list)
     if (payload === lastSavedRef.current) return
+    const seq = ++saveSeq.current
+    let cancelled = false
     let retryTimer: ReturnType<typeof setTimeout> | undefined
+    // When a newer request (debounced or flush) superseded this one, still settle
+    // the badge from what actually got saved — never leave it stuck on "Saving…".
+    const settle = () =>
+      setSaveState(lastSavedRef.current === JSON.stringify(listRef.current) ? 'saved' : 'idle')
     const timer = setTimeout(() => {
       setSaveState('saving')
       api
         .autosaveChat(projectId, list)
         .then(() => {
+          if (cancelled) return
+          if (seq !== saveSeq.current) return settle()
           lastSavedRef.current = payload
           setSaveState('saved')
         })
         .catch(() => {
+          if (cancelled) return
+          if (seq !== saveSeq.current) return settle()
           setSaveState('idle')
           retryTimer = setTimeout(() => setRetryTick((t) => t + 1), 4000)
         })
     }, 1200)
     return () => {
+      cancelled = true
       clearTimeout(timer)
       if (retryTimer) clearTimeout(retryTimer)
     }
   }, [list, building, projectId, retryTick])
+
+  // Flush the tail of the conversation when it would otherwise be lost:
+  // on tab hide (close/switch/minimize) and on unmount (switching projects) —
+  // the 1.2s debounce above may not have fired yet.
+  useEffect(() => {
+    const flush = (unloading: boolean) => {
+      const msgs = listRef.current
+      if (msgs.length === 0) return
+      const payload = JSON.stringify(msgs)
+      if (payload === lastSavedRef.current) return
+      saveSeq.current++ // any in-flight debounced save is now stale
+      lastSavedRef.current = payload // optimistic — outcome is unknowable mid-unload
+      setSaveState('saved')
+      // fetch's keepalive mode caps bodies at 64 KiB — beyond that, send a
+      // normal request (it still completes unless the tab is torn down first).
+      const keepalive = unloading && new TextEncoder().encode(payload).length < 55_000
+      api.autosaveChat(projectId, msgs, { keepalive }).catch(() => {
+        lastSavedRef.current = '' // still alive and it failed: the next change retries
+      })
+    }
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flush(true)
+    }
+    document.addEventListener('visibilitychange', onHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onHide)
+      flush(false) // unmount: project switch or sign-out with the tab still alive
+    }
+  }, [projectId])
 
   return (
     <section className="conv">
@@ -160,7 +207,7 @@ export function Conversation({
         )}
       </div>
 
-      <Composer onBuild={onBuild} building={building} showExamples={empty} />
+      <Composer onBuild={onBuild} building={building} />
 
       {historyOpen && <ChatHistory onClose={() => setHistoryOpen(false)} />}
     </section>

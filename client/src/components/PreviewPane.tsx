@@ -117,8 +117,7 @@ export function PreviewPane({
           <div className="gen">
             <div className="panel">
               <div className="ring" />
-              <div className="gt">{builderName ? `${builderName} is building` : 'Building your app'}</div>
-              <div className="gs">Writing code live — switch to the Code tab to watch</div>
+              <div className="gt">Building</div>
             </div>
           </div>
         )}

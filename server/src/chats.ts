@@ -77,6 +77,18 @@ chatsRouter.put('/autosave', async (req, res) => {
   const existing = await prisma.chatSession.findFirst({
     where: { userId: uid(req), projectId: v.projectId, kind: 'auto' },
   })
+  if (existing) {
+    // The room chat only ever grows, so a payload with fewer messages than we
+    // already hold is a stale request arriving out of order — keep what we have.
+    let existingCount = 0
+    try {
+      existingCount = JSON.parse(existing.messages).length
+    } catch {
+      /* corrupt stored payload — let the incoming one replace it */
+    }
+    if (v.messages.length < existingCount)
+      return res.json({ session: { id: existing.id, title: existing.title, updatedAt: existing.updatedAt } })
+  }
   const session = existing
     ? await prisma.chatSession.update({ where: { id: existing.id }, data: { title, messages: v.payload } })
     : await prisma.chatSession.create({

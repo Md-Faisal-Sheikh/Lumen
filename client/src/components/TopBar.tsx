@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth'
 import { useAwareness } from '../yhooks'
 import { type ProjectSummary } from '../api'
+import { toast } from '../toast'
 import { Spark, Share, Play, Plus, SignOut, Volume, VolumeOff } from '../icons'
 
 const initials = (name: string) =>
@@ -11,6 +13,9 @@ const initials = (name: string) =>
     .slice(0, 2)
     .join('')
     .toUpperCase()
+
+// Avatar colors offered in the profile menu (any #rrggbb passes the server check).
+const COLORS = ['#8b5cf6', '#e84cc4', '#38e0d8', '#3aa0ff', '#ff7eb6', '#f0a868', '#5ef0b6', '#b69bff', '#ef6a6a', '#eab308']
 
 export function TopBar({
   projects,
@@ -35,22 +40,66 @@ export function TopBar({
   onToggleVoice: () => void
   voiceOutSupported: boolean
 }) {
-  const { user, logout } = useAuth()
+  const { user, logout, updateProfile } = useAuth()
   const peers = useAwareness(awareness)
 
-  // De-duplicate everyone currently in the room by user id (you + peers).
-  const seen = new Set<string>()
-  const people: { id: string; name: string; color: string; you?: boolean }[] = []
-  if (user) {
-    people.push({ id: user.id, name: user.name, color: user.color, you: true })
-    seen.add(user.id)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [draftName, setDraftName] = useState('')
+  const [draftColor, setDraftColor] = useState('')
+  const [savingProfile, setSavingProfile] = useState(false)
+  const profileRef = useRef<HTMLDivElement>(null)
+
+  // Close the profile menu when clicking anywhere outside it.
+  useEffect(() => {
+    if (!profileOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [profileOpen])
+
+  const toggleProfile = () => {
+    if (!profileOpen && user) {
+      setDraftName(user.name)
+      setDraftColor(user.color)
+    }
+    setProfileOpen((v) => !v)
   }
+
+  const saveProfile = async () => {
+    if (!user || savingProfile) return
+    const name = draftName.trim()
+    if (!name) {
+      toast('Enter a display name.')
+      return
+    }
+    if (name === user.name && draftColor === user.color) {
+      setProfileOpen(false)
+      return
+    }
+    setSavingProfile(true)
+    try {
+      await updateProfile({ name, color: draftColor })
+      toast('Profile updated')
+      setProfileOpen(false)
+    } catch (e: any) {
+      toast(e?.message || 'Could not update your profile.')
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
+  // Everyone else currently in the room, de-duplicated by user id.
+  const seen = new Set<string>(user ? [user.id] : [])
+  const others: { id: string; name: string; color: string }[] = []
   for (const p of peers) {
     if (p.user && !seen.has(p.user.id)) {
       seen.add(p.user.id)
-      people.push({ id: p.user.id, name: p.user.name, color: p.user.color })
+      others.push({ id: p.user.id, name: p.user.name, color: p.user.color })
     }
   }
+
   return (
     <header className="topbar">
       <div className="brand">
@@ -85,14 +134,79 @@ export function TopBar({
 
       <div className="spacer" />
 
-      <div className="presence">
-        <div className="avatars">
-          {people.slice(0, 4).map((p) => (
-            <div key={p.id} className="avatar" style={{ background: p.color }} title={p.you ? `${p.name} (you)` : p.name}>
-              {initials(p.name)}
+      <div className="presence" ref={profileRef}>
+        {user && (
+          <button
+            className="avatar you"
+            style={{ background: user.color }}
+            onClick={toggleProfile}
+            title={`${user.name} — your profile`}
+            aria-label="Open your profile"
+            aria-expanded={profileOpen}
+          >
+            {initials(user.name)}
+          </button>
+        )}
+        {others.length > 0 && (
+          <div className="avatars">
+            {others.slice(0, 4).map((p) => (
+              <div key={p.id} className="avatar" style={{ background: p.color }} title={p.name}>
+                {initials(p.name)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {profileOpen && user && (
+          <div className="profile-menu" role="dialog" aria-label="Your profile">
+            <div className="pm-head">
+              <div className="avatar pm-avatar" style={{ background: draftColor }}>
+                {initials(draftName || user.name)}
+              </div>
+              <div className="pm-id">
+                <div className="pm-name">{user.name}</div>
+                <div className="pm-email">{user.email}</div>
+              </div>
             </div>
-          ))}
-        </div>
+            <label className="pm-label" htmlFor="pm-name-input">
+              Display name
+            </label>
+            <input
+              id="pm-name-input"
+              className="pm-input"
+              value={draftName}
+              maxLength={60}
+              onChange={(e) => setDraftName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveProfile()
+                if (e.key === 'Escape') setProfileOpen(false)
+              }}
+              spellCheck={false}
+            />
+            <span className="pm-label">Avatar color</span>
+            <div className="pm-swatches">
+              {COLORS.map((c) => (
+                <button
+                  key={c}
+                  className={`pm-swatch ${draftColor === c ? 'sel' : ''}`}
+                  style={{ background: c }}
+                  onClick={() => setDraftColor(c)}
+                  title={c}
+                  aria-label={`Use color ${c}`}
+                  aria-pressed={draftColor === c}
+                />
+              ))}
+            </div>
+            <div className="pm-actions">
+              <button className="btn primary" onClick={saveProfile} disabled={savingProfile}>
+                {savingProfile ? 'Saving…' : 'Save changes'}
+              </button>
+              <button className="btn ghost" onClick={logout}>
+                <SignOut width={15} height={15} /> Sign out
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <button className="btn ghost" onClick={onRun}>
