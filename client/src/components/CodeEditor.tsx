@@ -3,11 +3,22 @@ import type * as Y from 'yjs'
 import { EditorState } from '@codemirror/state'
 import { EditorView, basicSetup } from 'codemirror'
 import { html } from '@codemirror/lang-html'
+import { css } from '@codemirror/lang-css'
+import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { yCollab } from 'y-codemirror.next'
 
+// Pick a CodeMirror language by file extension (html covers unknown files too).
+function languageFor(path: string) {
+  if (/\.css$/i.test(path)) return css()
+  if (/\.(ts|tsx)$/i.test(path)) return javascript({ typescript: true, jsx: /x$/i.test(path) })
+  if (/\.(m?js|jsx)$/i.test(path)) return javascript({ jsx: /x$/i.test(path) })
+  if (/\.json$/i.test(path)) return javascript()
+  return html()
+}
+
 // A real collaborative editor: text and remote cursors both flow through Yjs.
-export function CodeEditor({ ytext, awareness }: { ytext: Y.Text; awareness: any }) {
+export function CodeEditor({ ytext, awareness, path = 'index.html' }: { ytext: Y.Text; awareness: any; path?: string }) {
   const host = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -16,7 +27,7 @@ export function CodeEditor({ ytext, awareness }: { ytext: Y.Text; awareness: any
       doc: ytext.toString(),
       extensions: [
         basicSetup,
-        html(),
+        languageFor(path),
         oneDark,
         yCollab(ytext, awareness),
         EditorView.theme({
@@ -27,7 +38,7 @@ export function CodeEditor({ ytext, awareness }: { ytext: Y.Text; awareness: any
     })
     const view = new EditorView({ state, parent: host.current })
     return () => view.destroy()
-  }, [ytext, awareness])
+  }, [ytext, awareness, path])
 
   return <div className="cm-host" ref={host} />
 }

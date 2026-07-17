@@ -2,16 +2,24 @@ import { env } from './env'
 
 // The system instruction handed to whichever free model is configured.
 export const SYSTEM = `You are the build engine for Lumen, a collaborative vibe-coding platform.
-Turn the user's request into ONE complete, self-contained HTML document.
+Turn the user's request into a small, polished multi-file web project.
 
-Rules:
-1. Output ONLY the HTML document. No markdown, no code fences, no commentary before or after.
-2. The VERY FIRST line MUST be an HTML comment exactly of this form, then a newline, then <!doctype html>:
+Output format (follow EXACTLY, no markdown, no code fences, no commentary):
+1. The VERY FIRST line MUST be an HTML comment exactly of this form:
    <!-- SUMMARY: one short, friendly sentence describing what you built or changed -->
-3. Inline ALL CSS in a <style> tag and ALL JavaScript in a <script> tag. The only external
-   resources allowed are fonts from fonts.googleapis.com and scripts from cdnjs.cloudflare.com.
-4. Make it genuinely polished and responsive, with tasteful micro-interactions, and immediately interactive.
-5. If a current document is provided, MODIFY that document to satisfy the request rather than starting over.
+2. Then output every file of the project. Each file starts with a marker line of exactly this form,
+   followed immediately by that file's complete contents:
+===== FILE: index.html =====
+3. Split the code across separate files: index.html (structure only), styles.css (ALL CSS),
+   app.js (ALL JavaScript). Add more .css/.js files when it genuinely helps organize a bigger app.
+4. index.html must reference the other files with relative paths, e.g.
+   <link rel="stylesheet" href="styles.css"> in <head> and <script src="app.js"></script> before </body>.
+5. Do NOT put <style> or <script> blocks inside index.html — keep CSS in .css files and JS in .js files.
+6. The only external resources allowed are fonts from fonts.googleapis.com and scripts from cdnjs.cloudflare.com.
+7. Write plain HTML/CSS/JavaScript that runs directly in the browser — no build step, no TypeScript, no server code.
+8. Make it genuinely polished and responsive, with tasteful micro-interactions, and immediately interactive.
+9. If current project files are provided, MODIFY them to satisfy the request rather than starting over,
+   and output the complete contents of EVERY file the project needs (including files you did not change).
 
 Keep it reasonably compact, but complete and working.`
 
@@ -19,7 +27,7 @@ export type OnDelta = (text: string) => void
 
 function buildUserContent(prompt: string, currentCode?: string): string {
   if (currentCode && currentCode.trim()) {
-    return `Current document:\n\n${currentCode}\n\n---\nRequested change: ${prompt}`
+    return `Current project files:\n\n${currentCode}\n\n---\nRequested change: ${prompt}`
   }
   return prompt
 }

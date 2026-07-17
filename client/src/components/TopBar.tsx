@@ -51,8 +51,6 @@ export function TopBar({
       people.push({ id: p.user.id, name: p.user.name, color: p.user.color })
     }
   }
-  const others = people.length - 1
-
   return (
     <header className="topbar">
       <div className="brand">
@@ -88,10 +86,6 @@ export function TopBar({
       <div className="spacer" />
 
       <div className="presence">
-        <div className="live">
-          <span className="dot" />
-          <span>{others > 0 ? `${others} other${others > 1 ? 's' : ''} here` : 'Live'}</span>
-        </div>
         <div className="avatars">
           {people.slice(0, 4).map((p) => (
             <div key={p.id} className="avatar" style={{ background: p.color }} title={p.you ? `${p.name} (you)` : p.name}>

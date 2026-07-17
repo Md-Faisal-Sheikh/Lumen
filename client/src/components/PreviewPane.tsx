@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type * as Y from 'yjs'
 import { CodeEditor } from './CodeEditor'
 import { Cursors } from './Cursors'
-import { CodeIcon, EyeIcon, Refresh, Spark } from '../icons'
+import { CodeIcon, EyeIcon, FileIcon, Refresh, Spark } from '../icons'
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 
@@ -12,7 +12,8 @@ export function PreviewPane({
   previewCode,
   building,
   builderName,
-  ytext,
+  activeFile,
+  activeText,
   awareness,
   onRun,
 }: {
@@ -21,7 +22,8 @@ export function PreviewPane({
   previewCode: string
   building: boolean
   builderName?: string
-  ytext: Y.Text
+  activeFile: string
+  activeText: Y.Text
   awareness: any
   onRun: () => void
 }) {
@@ -62,6 +64,12 @@ export function PreviewPane({
             <CodeIcon /> Code
           </button>
         </div>
+        {tab === 'code' && (
+          <div className="file-chip" title={activeFile}>
+            <FileIcon width={13} height={13} />
+            <span>{activeFile}</span>
+          </div>
+        )}
         <div className="ws-url">
           <div className="ws-pill">
             <svg className="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -93,15 +101,15 @@ export function PreviewPane({
                   <Spark width={26} height={26} />
                 </div>
                 <h3>Your app will appear here</h3>
-                <p>Describe what you want on the left. Lumen builds it and runs it live in this space.</p>
+                <p>Describe what you want in the chat on the right. Lumen builds it and runs it live in this space.</p>
               </div>
             </div>
           )}
         </div>
 
-        {/* Code tab — always mounted so collaborative editing stays connected */}
+        {/* Code tab — remounts per file so the collab binding follows the selection */}
         <div style={{ position: 'absolute', inset: 0, visibility: tab === 'code' ? 'visible' : 'hidden' }}>
-          <CodeEditor ytext={ytext} awareness={awareness} />
+          <CodeEditor key={activeFile} ytext={activeText} awareness={awareness} path={activeFile} />
         </div>
 
         {/* Generation overlay */}

@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws'
 import { env, isProd } from './env'
 import { authRouter } from './auth'
 import { projectsRouter } from './projects'
+import { chatsRouter } from './chats'
 import { hocuspocus } from './collab'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -19,6 +20,7 @@ app.use(express.json({ limit: '8mb' }))
 app.get('/api/health', (_req, res) => res.json({ ok: true, provider: env.AI_PROVIDER }))
 app.use('/api/auth', authRouter)
 app.use('/api/projects', projectsRouter)
+app.use('/api/chats', chatsRouter)
 
 // In production, serve the compiled client from the same origin.
 if (isProd) {

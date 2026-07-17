@@ -3,12 +3,14 @@ import * as Y from 'yjs'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import { api, getToken, WS_URL, API_URL, type ProjectSummary } from './api'
 import { useAuth } from './auth'
-import { useYMap } from './yhooks'
+import { useYMap, useYMapKeys } from './yhooks'
 import { toast } from './toast'
 import { speak, stopSpeaking, speechOutputSupported } from './speech'
+import { assemblePreview, createBuildWriter, INDEX_FILE, normalizePath, serializeWorkspace, starterContent } from './files'
 import { TopBar } from './components/TopBar'
 import { Conversation } from './components/Conversation'
 import { PreviewPane } from './components/PreviewPane'
+import { FileExplorer } from './components/FileExplorer'
 
 const uid = () => Math.random().toString(36).slice(2, 10)
 const projectFromUrl = () => new URLSearchParams(location.search).get('p')
@@ -109,17 +111,39 @@ function Room({
     [projectId, ydoc]
   )
 
-  const ytext = useMemo(() => ydoc.getText('code'), [ydoc])
+  const ytext = useMemo(() => ydoc.getText('code'), [ydoc]) // index.html — the build target
+  const yfiles = useMemo(() => ydoc.getMap<Y.Text>('files'), [ydoc]) // extra files by path
   const ychat = useMemo(() => ydoc.getArray<Y.Map<any>>('chat'), [ydoc])
   const ymeta = useMemo(() => ydoc.getMap<any>('meta'), [ydoc])
 
   const meta = useYMap(ymeta)
   const building = !!meta.building
 
+  const fileKeys = useYMapKeys(yfiles)
+  const files = useMemo(() => [INDEX_FILE, ...fileKeys.filter((k) => k !== INDEX_FILE)], [fileKeys])
+  const [activeFile, setActiveFile] = useState(INDEX_FILE)
+
   const [previewCode, setPreviewCode] = useState('')
   const [tab, setTab] = useState<'preview' | 'code'>('preview')
   const [voiceOut, setVoiceOut] = useState(false)
   const wasBuilding = useRef(false)
+
+  // If the file we're editing is deleted by a collaborator, fall back to index.html.
+  useEffect(() => {
+    if (activeFile !== INDEX_FILE && !fileKeys.includes(activeFile)) setActiveFile(INDEX_FILE)
+  }, [fileKeys, activeFile])
+
+  const textFor = (path: string): Y.Text => (path === INDEX_FILE ? ytext : yfiles.get(path) ?? ytext)
+
+  const filesSnapshot = (): Record<string, string> => {
+    const snap: Record<string, string> = {}
+    yfiles.forEach((text, path) => {
+      if (path !== INDEX_FILE) snap[path] = text.toString()
+    })
+    return snap
+  }
+
+  const assemble = () => assemblePreview(ytext.toString(), filesSnapshot())
 
   // Identify ourselves to other people in the room (drives cursors + presence).
   useEffect(() => {
@@ -134,19 +158,23 @@ function Room({
   useEffect(() => {
     const onSynced = () => {
       const code = ytext.toString()
-      if (code && !ymeta.get('building')) setPreviewCode(code)
+      if (code && !ymeta.get('building')) setPreviewCode(assemblePreview(code, filesSnapshot()))
     }
     provider.on('synced', onSynced)
-    return () => provider.off('synced', onSynced)
+    return () => {
+      provider.off('synced', onSynced)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider, ytext, ymeta])
 
   // Refresh the preview when a build finishes (building flips true → false).
   useEffect(() => {
     if (wasBuilding.current && !building) {
-      setPreviewCode(ytext.toString())
+      setPreviewCode(assemble())
       setTab('preview')
     }
     wasBuilding.current = building
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [building, ytext])
 
   const pushMessage = (msg: Record<string, any>) => {
@@ -155,17 +183,104 @@ function Room({
     ychat.push([m])
   }
 
-  // The build: stream generated code into the shared Y.Text so everyone watches it write.
+  // ── File operations (all through Yjs, so the whole room stays in sync). ──
+  const collision = (path: string) =>
+    files.find((f) => f !== path && (f.startsWith(path + '/') || path.startsWith(f + '/')))
+
+  const createFile = (input: string) => {
+    const path = normalizePath(input)
+    if (!path) {
+      toast('Use a simple path with an extension, like styles/theme.css')
+      return
+    }
+    if (files.includes(path)) {
+      setActiveFile(path)
+      setTab('code')
+      return
+    }
+    const clash = collision(path)
+    if (clash) {
+      toast(`That path conflicts with "${clash}".`)
+      return
+    }
+    yfiles.set(path, new Y.Text(starterContent(path)))
+    setActiveFile(path)
+    setTab('code')
+  }
+
+  const renameFile = (from: string) => {
+    if (from === INDEX_FILE) return
+    const input = window.prompt('Rename file', from)
+    if (input === null || input.trim() === from) return
+    const to = normalizePath(input)
+    if (!to) {
+      toast('Use a simple path with an extension, like styles/theme.css')
+      return
+    }
+    if (to === INDEX_FILE || files.includes(to)) {
+      toast('A file with that name already exists.')
+      return
+    }
+    const clash = collision(to)
+    if (clash) {
+      toast(`That path conflicts with "${clash}".`)
+      return
+    }
+    const current = yfiles.get(from)
+    if (!current) return
+    const content = current.toString()
+    ydoc.transact(() => {
+      yfiles.delete(from)
+      yfiles.set(to, new Y.Text(content))
+    })
+    if (activeFile === from) setActiveFile(to)
+  }
+
+  const deleteFile = (path: string) => {
+    if (path === INDEX_FILE) return
+    if (!window.confirm(`Delete ${path} for everyone in the room?`)) return
+    yfiles.delete(path)
+    if (activeFile === path) setActiveFile(INDEX_FILE)
+  }
+
+  const selectFile = (path: string) => {
+    setActiveFile(path)
+    setTab('code')
+  }
+
+  // The build: stream generated code into the shared Yjs files so everyone watches it write.
+  // The model emits `===== FILE: path =====` sections; the writer splits the stream into
+  // index.html, styles.css, app.js, … live, so files pop into the explorer as they're written.
   const runBuild = async (prompt: string) => {
     if (ymeta.get('building')) return
-    const currentCode = ytext.toString()
+    const indexNow = ytext.toString()
+    // Hand the model every current file (marker format) so it can modify the project.
+    const currentCode = indexNow.trim() ? serializeWorkspace(indexNow, filesSnapshot()) : ''
 
     pushMessage({ id: uid(), role: 'user', authorName: user!.name, color: user!.color, text: prompt, ts: Date.now() })
     ydoc.transact(() => {
       ymeta.set('building', { by: user!.name, color: user!.color, at: Date.now() })
       ytext.delete(0, ytext.length)
     })
+    setActiveFile(INDEX_FILE)
     setTab('code')
+
+    const writer = createBuildWriter({
+      reset: (path) => {
+        if (path === INDEX_FILE) {
+          ytext.delete(0, ytext.length)
+          return
+        }
+        const existing = yfiles.get(path)
+        if (existing) existing.delete(0, existing.length)
+        else yfiles.set(path, new Y.Text())
+      },
+      append: (path, text) => {
+        const t = path === INDEX_FILE ? ytext : yfiles.get(path)
+        t?.insert(t.length, text)
+      },
+      onFile: (path) => setActiveFile(path), // follow the file being written
+    })
 
     try {
       const res = await fetch(`${API_URL}/api/projects/${projectId}/build`, {
@@ -187,7 +302,7 @@ function Room({
         if ((force || now - lastFlush > 90) && pending) {
           const chunk = pending
           pending = ''
-          ydoc.transact(() => ytext.insert(ytext.length, chunk))
+          ydoc.transact(() => writer.push(chunk))
           lastFlush = now
         }
       }
@@ -219,7 +334,8 @@ function Room({
         }
       }
       flush(true)
-      const reply = summary || "Here's your app, running live on the right. Tell me what to change."
+      ydoc.transact(() => writer.end())
+      const reply = summary || "Here's your app, running live in the preview. Tell me what to change."
       pushMessage({
         id: uid(),
         role: 'assistant',
@@ -241,7 +357,7 @@ function Room({
   }
 
   const runPreview = () => {
-    setPreviewCode(ytext.toString())
+    setPreviewCode(assemble())
     setTab('preview')
   }
 
@@ -271,6 +387,8 @@ function Room({
     })
   }
 
+  const projectName = projects.find((p) => p.id === projectId)?.name ?? 'Project'
+
   return (
     <div className="app">
       <TopBar
@@ -286,17 +404,27 @@ function Room({
         voiceOutSupported={speechOutputSupported()}
       />
       <div className="main">
-        <Conversation messages={ychat} meta={ymeta} onBuild={runBuild} />
+        <FileExplorer
+          projectName={projectName}
+          files={files}
+          active={activeFile}
+          onSelect={selectFile}
+          onCreate={createFile}
+          onRename={renameFile}
+          onDelete={deleteFile}
+        />
         <PreviewPane
           tab={tab}
           onTab={setTab}
           previewCode={previewCode}
           building={building}
           builderName={meta.building?.by}
-          ytext={ytext}
+          activeFile={activeFile}
+          activeText={textFor(activeFile)}
           awareness={provider.awareness}
           onRun={runPreview}
         />
+        <Conversation projectId={projectId} messages={ychat} meta={ymeta} onBuild={runBuild} />
       </div>
     </div>
   )
