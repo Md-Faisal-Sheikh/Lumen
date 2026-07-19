@@ -6,7 +6,18 @@ import { useAuth } from './auth'
 import { useYMap, useYMapKeys, useYTextNonEmpty } from './yhooks'
 import { toast } from './toast'
 import { speak, stopSpeaking, speechOutputSupported } from './speech'
-import { assemblePreview, createBuildWriter, INDEX_FILE, normalizePath, serializeWorkspace, starterContent } from './files'
+import {
+  applyOpsToContent,
+  assemblePreview,
+  createBuildWriter,
+  INDEX_FILE,
+  isLineEditPrompt,
+  normalizePath,
+  replaceTextRanged,
+  serializeWorkspace,
+  starterContent,
+  type LineEdit,
+} from './files'
 import { TopBar } from './components/TopBar'
 import { Conversation } from './components/Conversation'
 import { PreviewPane } from './components/PreviewPane'
@@ -280,6 +291,9 @@ function Room({
   const runBuild = async (prompt: string) => {
     if (ymeta.get('building')) return
     const indexNow = ytext.toString()
+    // Prompts that name specific line numbers become precise line edits —
+    // nothing is cleared or regenerated, only the named lines change.
+    if (indexNow.trim() && isLineEditPrompt(prompt)) return runLineEdit(prompt)
     // Hand the model every current file (marker format) so it can modify the project.
     const currentCode = indexNow.trim() ? serializeWorkspace(indexNow, filesSnapshot()) : ''
 
@@ -322,6 +336,7 @@ function Room({
       let pending = ''
       let lastFlush = 0
       let summary: string | null = null
+      let fromCache = false
 
       const flush = (force: boolean) => {
         const now = Date.now()
@@ -356,6 +371,7 @@ function Room({
             throw new Error(obj.error)
           } else if (obj.done) {
             summary = obj.summary ?? null
+            fromCache = obj.cached === true
           }
         }
       }
@@ -367,6 +383,7 @@ function Room({
         role: 'assistant',
         text: reply,
         hasBuild: true,
+        fromCache,
         ts: Date.now(),
       })
       if (voiceOut) speak(reply)
@@ -375,6 +392,54 @@ function Room({
         id: uid(),
         role: 'error',
         text: err?.message ? `That build didn't finish: ${err.message}` : "That build didn't come through. Try describing it again.",
+        ts: Date.now(),
+      })
+    } finally {
+      ydoc.transact(() => ymeta.set('building', null))
+    }
+  }
+
+  // Precise line edits: the server turns "change line 14 in index.html" into
+  // validated line operations against a snapshot of the current files, and we
+  // apply exactly those ranges to the shared Yjs document — no clearing, no
+  // rebuild, untouched lines stay byte-identical. The building flag drives the
+  // same indicator + preview-refresh effect the build flow uses.
+  const runLineEdit = async (prompt: string) => {
+    const currentCode = serializeWorkspace(ytext.toString(), filesSnapshot())
+    pushMessage({ id: uid(), role: 'user', authorName: user!.name, color: user!.color, text: prompt, ts: Date.now() })
+    ydoc.transact(() => ymeta.set('building', { by: user!.name, color: user!.color, at: Date.now(), mode: 'edit' }))
+    try {
+      const { summary, edits, skipped, detail } = await api.edit(projectId, prompt, currentCode)
+
+      const byFile = new Map<string, LineEdit[]>()
+      for (const op of edits) {
+        const list = byFile.get(op.file) ?? []
+        list.push(op)
+        byFile.set(op.file, list)
+      }
+      ydoc.transact(() => {
+        for (const [file, ops] of byFile) {
+          const target = file === INDEX_FILE ? ytext : yfiles.get(file)
+          if (!target) continue // deleted by a collaborator mid-request
+          replaceTextRanged(target, applyOpsToContent(target.toString(), ops))
+        }
+      })
+      const firstFile = edits[0]?.file
+      if (firstFile && (firstFile === INDEX_FILE || yfiles.has(firstFile))) setActiveFile(firstFile)
+
+      let reply = summary || (detail ? `Updated ${detail}.` : 'Done — lines updated.')
+      if (skipped.length > 0) {
+        reply += ` (${skipped.length} requested change${skipped.length > 1 ? 's' : ''} couldn't be applied: ${skipped[0]})`
+      }
+      pushMessage({ id: uid(), role: 'assistant', text: reply, hasEdit: true, editNote: detail, ts: Date.now() })
+      if (voiceOut) speak(reply)
+    } catch (err: any) {
+      pushMessage({
+        id: uid(),
+        role: 'error',
+        text: err?.message
+          ? `That edit didn't go through: ${err.message}`
+          : "That edit didn't go through. Try naming the file and line, like \"change line 14 in index.html\".",
         ts: Date.now(),
       })
     } finally {

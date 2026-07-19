@@ -1,3 +1,5 @@
+import type { LineEdit } from './files'
+
 // Base URLs. Both default to a local server; override with VITE_API_URL / VITE_WS_URL.
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
 export const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:4000'
@@ -72,6 +74,11 @@ export const api = {
   rename: (id: string, name: string) => req(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
   invite: (id: string, email: string) => req(`/api/projects/${id}/invite`, { method: 'POST', body: JSON.stringify({ email }) }),
   versions: (id: string) => req<{ versions: { id: string; prompt: string; createdAt: string }[] }>(`/api/projects/${id}/versions`),
+  edit: (id: string, prompt: string, currentCode: string) =>
+    req<{ summary: string | null; edits: LineEdit[]; skipped: string[]; detail: string }>(`/api/projects/${id}/edit`, {
+      method: 'POST',
+      body: JSON.stringify({ prompt, currentCode }),
+    }),
   chats: (projectId?: string) =>
     req<{ sessions: ChatSessionSummary[] }>(`/api/chats${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
   saveChat: (projectId: string, messages: any[], title?: string) =>

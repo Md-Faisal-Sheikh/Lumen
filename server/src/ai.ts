@@ -23,6 +23,41 @@ Output format (follow EXACTLY, no markdown, no code fences, no commentary):
 
 Keep it reasonably compact, but complete and working.`
 
+// The system instruction for precise line edits ("change line 14 in index.html").
+// The model sees the files WITH line numbers and must answer with a minimal set
+// of line operations — never a full rebuild.
+export const EDIT_SYSTEM = `You are the precision line-editor for Lumen, a collaborative coding platform.
+The user gives you the current project files with line numbers, plus an instruction that
+references specific lines. Apply the instruction as a MINIMAL set of line operations.
+Do NOT rewrite whole files. Do NOT touch lines the user didn't ask about.
+
+Output format (follow EXACTLY, no markdown, no code fences, no commentary):
+1. The VERY FIRST line MUST be an HTML comment exactly of this form:
+   <!-- SUMMARY: one short, friendly sentence describing the change -->
+2. Then one or more operations, in any order:
+
+Replace an inclusive range of lines with new content:
+===== REPLACE path @ start-end =====
+the new line(s) of raw code
+===== END =====
+
+Insert new lines AFTER a given line (use 0 to insert at the very top of the file):
+===== INSERT path @ line =====
+the new line(s) of raw code
+===== END =====
+
+Delete an inclusive range of lines (no body, no END):
+===== DELETE path @ start-end =====
+
+Rules:
+- Line numbers ALWAYS refer to the ORIGINAL numbering shown in the input. Never renumber
+  to account for your own earlier operations.
+- Operations on the same file must not overlap.
+- A REPLACE may produce more or fewer lines than it removes — that is fine.
+- NEVER include the "NN| " line-number prefixes in the content you output.
+- Only reference files that exist in the input.
+- A single-line operation may be written as "@ 14" instead of "@ 14-14".`
+
 export type OnDelta = (text: string) => void
 
 function buildUserContent(prompt: string, currentCode?: string): string {
@@ -32,17 +67,28 @@ function buildUserContent(prompt: string, currentCode?: string): string {
   return prompt
 }
 
-export async function streamBuild(prompt: string, currentCode: string | undefined, onDelta: OnDelta): Promise<string> {
-  const user = buildUserContent(prompt, currentCode)
+// Dispatch one generation to whichever provider is configured.
+async function runModel(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
   switch (env.AI_PROVIDER) {
     case 'gemini':
-      return streamGemini(user, onDelta)
+      return streamGemini(system, user, temperature, onDelta)
     case 'ollama':
-      return streamOllama(user, onDelta)
+      return streamOllama(system, user, temperature, onDelta)
     case 'openrouter':
     default:
-      return streamOpenRouter(user, onDelta)
+      return streamOpenRouter(system, user, temperature, onDelta)
   }
+}
+
+export async function streamBuild(prompt: string, currentCode: string | undefined, onDelta: OnDelta): Promise<string> {
+  return runModel(SYSTEM, buildUserContent(prompt, currentCode), 0.6, onDelta)
+}
+
+// Ask the model for line operations against the numbered workspace. Low temperature:
+// this is surgery, not creativity. The full response is returned for parsing.
+export async function runEditModel(prompt: string, numberedWorkspace: string): Promise<string> {
+  const user = `Current project files with line numbers:\n\n${numberedWorkspace}\n\n---\nRequested edit: ${prompt}`
+  return runModel(EDIT_SYSTEM, user, 0.2, () => {})
 }
 
 export function extractSummary(full: string): string | null {
@@ -95,7 +141,7 @@ async function readSSE(
 }
 
 // ── OpenRouter (OpenAI-compatible, free tier) ───────────────────────
-async function streamOpenRouter(user: string, onDelta: OnDelta): Promise<string> {
+async function streamOpenRouter(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
   if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set. Add a key from openrouter.ai/keys')
   const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -108,10 +154,10 @@ async function streamOpenRouter(user: string, onDelta: OnDelta): Promise<string>
     body: JSON.stringify({
       model: env.OPENROUTER_MODEL,
       stream: true,
-      temperature: 0.6,
+      temperature,
       max_tokens: 8000,
       messages: [
-        { role: 'system', content: SYSTEM },
+        { role: 'system', content: system },
         { role: 'user', content: user },
       ],
     }),
@@ -124,16 +170,16 @@ async function streamOpenRouter(user: string, onDelta: OnDelta): Promise<string>
 }
 
 // ── Google Gemini (free tier) ───────────────────────────────────────
-async function streamGemini(user: string, onDelta: OnDelta): Promise<string> {
+async function streamGemini(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
   if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is not set. Add a free key from aistudio.google.com/apikey')
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:streamGenerateContent?alt=sse&key=${env.GEMINI_API_KEY}`
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM }] },
+      systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { temperature: 0.6, maxOutputTokens: 8192 },
+      generationConfig: { temperature, maxOutputTokens: 8192 },
     }),
   })
   if (!r.ok || !r.body) throw new Error(`Gemini error ${r.status}: ${await safeText(r)}`)
@@ -145,15 +191,16 @@ async function streamGemini(user: string, onDelta: OnDelta): Promise<string> {
 }
 
 // ── Ollama (fully local, free, newline-delimited JSON) ──────────────
-async function streamOllama(user: string, onDelta: OnDelta): Promise<string> {
+async function streamOllama(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
   const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: env.OLLAMA_MODEL,
       stream: true,
+      options: { temperature },
       messages: [
-        { role: 'system', content: SYSTEM },
+        { role: 'system', content: system },
         { role: 'user', content: user },
       ],
     }),

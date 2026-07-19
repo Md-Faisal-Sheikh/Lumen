@@ -13,6 +13,9 @@ interface Message {
   authorName?: string
   color?: string
   hasBuild?: boolean
+  fromCache?: boolean // build served straight from the database cache
+  hasEdit?: boolean // precise line edit (no rebuild)
+  editNote?: string // e.g. "index.html · line 14"
   ts?: number
 }
 
@@ -180,7 +183,18 @@ export function Conversation({
                   </div>
                   <div>
                     <div className="bc-t">App updated</div>
-                    <div className="bc-s">Running live in the preview</div>
+                    <div className="bc-s">{m.fromCache ? 'Served instantly from the build library' : 'Running live in the preview'}</div>
+                  </div>
+                </div>
+              )}
+              {m.hasEdit && (
+                <div className="buildcard">
+                  <div className="bc-icon">
+                    <Spark width={14} height={14} />
+                  </div>
+                  <div>
+                    <div className="bc-t">Lines updated</div>
+                    <div className="bc-s">{m.editNote || 'Applied precisely to the code'}</div>
                   </div>
                 </div>
               )}
@@ -198,7 +212,11 @@ export function Conversation({
               <div className="building">
                 <span className="orb" />
                 <span>
-                  {metaState.building?.by ? `${metaState.building.by} is building` : 'Building'}
+                  {metaState.building?.by
+                    ? `${metaState.building.by} is ${metaState.building?.mode === 'edit' ? 'editing lines' : 'building'}`
+                    : metaState.building?.mode === 'edit'
+                      ? 'Editing lines'
+                      : 'Building'}
                   <span className="ddd" />
                 </span>
               </div>

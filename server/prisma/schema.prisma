@@ -74,6 +74,20 @@ model ChatSession {
   @@index([userId, createdAt])
 }
 
+// Shared prompt → generated-code cache. When any user asks for a fresh build
+// whose prompt matches one already generated (normalized), the code is served
+// straight from the database instead of calling the AI again.
+model BuildCache {
+  id        String   @id @default(cuid())
+  promptKey String   @unique // normalized prompt (lowercased, whitespace-collapsed)
+  prompt    String // the original prompt as first typed
+  output    String // full marker-format model output (every file)
+  summary   String?
+  hits      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
 // Binary Yjs document state, persisted by the Hocuspocus database extension.
 model Doc {
   projectId String   @id

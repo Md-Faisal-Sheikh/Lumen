@@ -1,7 +1,16 @@
 import { Router, type Request, type Response } from 'express'
 import { prisma } from './db'
 import { authMiddleware } from './auth'
-import { streamBuild, extractSummary } from './ai'
+import { streamBuild, extractSummary, runEditModel } from './ai'
+import {
+  applyEditsToFiles,
+  describeEdits,
+  numberWorkspace,
+  parseEditOps,
+  parseWorkspace,
+  prepareEdits,
+  serializeWorkspace,
+} from './edits'
 
 export const projectsRouter = Router()
 
@@ -119,6 +128,14 @@ projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
   res.json({ version })
 })
 
+// Normalize a prompt into the shared cache key, so the same request in
+// different casing/spacing hits the same entry.
+const promptKey = (prompt: string) => prompt.toLowerCase().replace(/\s+/g, ' ').trim()
+
+// Only cache output that actually looks like a generated project — never a
+// refusal or error prose, which would poison the cache for every user.
+const looksLikeProject = (out: string) => /={3,}\s*FILE:/.test(out) || /<!doctype html/i.test(out)
+
 // ── The build endpoint: streams generated code back as Server-Sent Events. ──
 projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const m = await membership(req.params.id, uid(req))
@@ -137,6 +154,20 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`)
 
   try {
+    // Fresh build (no existing code to modify): if any user already generated
+    // this same prompt, serve the code straight from the database — no AI call.
+    if (!currentCode) {
+      const cached = await prisma.buildCache.findUnique({ where: { promptKey: promptKey(prompt) } })
+      if (cached) {
+        for (let i = 0; i < cached.output.length; i += 4096) send({ delta: cached.output.slice(i, i + 4096) })
+        await prisma.version.create({ data: { projectId: req.params.id, prompt, html: cached.output } })
+        await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
+        await prisma.buildCache.update({ where: { id: cached.id }, data: { hits: { increment: 1 } } })
+        send({ done: true, summary: cached.summary ?? extractSummary(cached.output), cached: true })
+        return
+      }
+    }
+
     const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }))
     const summary = extractSummary(full)
 
@@ -144,10 +175,69 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
     await prisma.version.create({ data: { projectId: req.params.id, prompt, html: full } })
     await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
 
+    // Save fresh builds into the shared cache: the next user who asks for the
+    // same project gets this code from the database instantly.
+    if (!currentCode && looksLikeProject(full)) {
+      await prisma.buildCache.upsert({
+        where: { promptKey: promptKey(prompt) },
+        create: { promptKey: promptKey(prompt), prompt, output: full, summary },
+        update: { output: full, summary },
+      })
+    }
+
     send({ done: true, summary })
   } catch (err: any) {
     send({ error: err?.message || 'The build did not complete.' })
   } finally {
     res.end()
+  }
+})
+
+// ── The edit endpoint: precise line-level changes ("change line 14 in index.html").
+// The model sees the numbered files and answers with line operations, which are
+// validated here and applied by the client to the shared document. Returns JSON —
+// nothing streams into the editor, so untouched lines are never disturbed.
+projectsRouter.post('/:id/edit', async (req: Request, res: Response) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const prompt = (req.body?.prompt ?? '').toString()
+  const currentCode = (req.body?.currentCode ?? '').toString()
+  if (!prompt.trim()) return res.status(400).json({ error: 'Describe the edit to make.' })
+
+  const files = parseWorkspace(currentCode)
+  if (!currentCode.trim() || Object.keys(files).length === 0) {
+    return res.status(400).json({ error: 'There is no code to edit yet — build something first.' })
+  }
+
+  try {
+    const raw = await runEditModel(prompt, numberWorkspace(files))
+    const { ops } = parseEditOps(raw)
+    if (ops.length === 0) {
+      return res.status(422).json({
+        error: 'Couldn\'t turn that into a line edit. Try naming the file and line, e.g. "change line 14 in index.html".',
+      })
+    }
+
+    const { applied, skipped } = prepareEdits(ops, files)
+    if (applied.length === 0) {
+      return res
+        .status(422)
+        .json({ error: `Couldn't apply that edit: ${skipped[0]?.reason ?? 'no valid line operations'}.` })
+    }
+
+    // Snapshot the edited workspace as a version, same as builds do.
+    const updated = applyEditsToFiles(files, applied)
+    await prisma.version.create({ data: { projectId: req.params.id, prompt, html: serializeWorkspace(updated) } })
+    await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
+
+    res.json({
+      summary: extractSummary(raw),
+      edits: applied,
+      skipped: skipped.map((s) => s.reason),
+      detail: describeEdits(applied),
+    })
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || 'The edit did not complete.' })
   }
 })

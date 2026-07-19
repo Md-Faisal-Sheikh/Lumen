@@ -1,6 +1,8 @@
 // Helpers for the multi-file project workspace: path rules, the explorer tree,
 // and assembling the sandboxed preview from index.html + supporting files.
 
+import type * as Y from 'yjs'
+
 export const INDEX_FILE = 'index.html'
 
 // Clean a user-typed path: forward slashes, no leading slash, no "..", sane charset.
@@ -163,6 +165,56 @@ export function createBuildWriter(target: {
       }
     },
   }
+}
+
+// ── Line-level edits ("change line 14 in index.html") ───────────────
+// The server turns such prompts into validated REPLACE / INSERT / DELETE line
+// operations (already ordered bottom-up per file); we apply exactly those to
+// the shared Yjs files, so untouched lines are never regenerated.
+
+export type LineEdit =
+  | { op: 'replace'; file: string; start: number; end: number; content: string }
+  | { op: 'insert'; file: string; after: number; content: string }
+  | { op: 'delete'; file: string; start: number; end: number }
+
+// Does the prompt reference specific line numbers? ("change line 14 …",
+// "update lines 3-5", "delete line #7"). Digit-first phrases like "add 3 lines
+// of text" deliberately do NOT match — those stay normal build requests.
+const LINE_EDIT_RE = /\blines?\s*(?:#|no\.?|number)?\s*\d+/i
+export const isLineEditPrompt = (prompt: string) => LINE_EDIT_RE.test(prompt)
+
+const spliceIndex = (op: LineEdit) => (op.op === 'insert' ? op.after : op.start - 1)
+const spliceCount = (op: LineEdit) => (op.op === 'insert' ? 0 : op.end - op.start + 1)
+
+// Apply one file's ordered ops to its current content. Bounds are clamped:
+// the ops were validated against a snapshot, and a collaborator may have
+// typed since it was taken.
+export function applyOpsToContent(content: string, ops: LineEdit[]): string {
+  const lines = content.split('\n')
+  for (const op of ops) {
+    const index = Math.max(0, Math.min(spliceIndex(op), lines.length))
+    const count = Math.max(0, Math.min(spliceCount(op), lines.length - index))
+    const body = op.op === 'delete' ? '' : op.content
+    lines.splice(index, count, ...(body === '' ? [] : body.split('\n')))
+  }
+  return lines.join('\n')
+}
+
+// Move a Y.Text to new content by replacing only the changed middle span
+// (common prefix/suffix left untouched), so collaborators' cursors and
+// concurrent edits elsewhere in the file survive the change.
+export function replaceTextRanged(t: Y.Text, next: string) {
+  const prev = t.toString()
+  if (prev === next) return
+  let head = 0
+  const maxHead = Math.min(prev.length, next.length)
+  while (head < maxHead && prev[head] === next[head]) head++
+  let tail = 0
+  const maxTail = Math.min(prev.length, next.length) - head
+  while (tail < maxTail && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail++
+  t.delete(head, prev.length - head - tail)
+  const middle = next.slice(head, next.length - tail)
+  if (middle) t.insert(head, middle)
 }
 
 // Map an href/src to a workspace file, or null if it's external.
