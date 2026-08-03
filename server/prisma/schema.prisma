@@ -33,6 +33,24 @@ model Project {
   versions  Version[]
   doc       Doc?
   chats     ChatSession[]
+  publication Publication?
+}
+
+// A project published to a public link. The HTML is a snapshot taken when the
+// owner pressed Publish — never the live document — so work in progress is
+// never exposed and the link keeps working while the project is being changed.
+// Held in its own table so the (potentially large) HTML is not dragged along by
+// every ordinary project query.
+model Publication {
+  id        String   @id @default(cuid())
+  projectId String   @unique
+  slug      String   @unique // the /p/<slug> path; random suffix keeps it unguessable
+  title     String
+  html      String
+  views     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
 
 model ProjectMember {

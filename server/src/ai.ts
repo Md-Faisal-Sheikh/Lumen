@@ -58,6 +58,28 @@ Rules:
 - Only reference files that exist in the input.
 - A single-line operation may be written as "@ 14" instead of "@ 14-14".`
 
+// The system instruction for a selection-scoped edit (Ctrl+K in the editor).
+// The model is handed an exact span the user highlighted and answers with the
+// replacement for that span — there are no line numbers to guess at and no
+// operations to parse, so it cannot touch a line the user didn't select.
+export const INLINE_SYSTEM = `You are the inline editor for Lumen, a collaborative coding platform.
+The user highlighted an exact span of lines in one file and described a change.
+Rewrite ONLY that span.
+
+Output format (follow EXACTLY, no markdown, no code fences, no commentary):
+1. The VERY FIRST line MUST be an HTML comment exactly of this form:
+   <!-- SUMMARY: one short, friendly sentence describing the change -->
+2. Every line after that is the replacement text for the highlighted span, raw.
+
+Rules:
+- Output the replacement for the highlighted span ONLY. Never repeat the rest of the file.
+- Keep the indentation level of the original span and the file's indentation style.
+- You may output more or fewer lines than were highlighted.
+- To remove the span entirely, output exactly one line after the summary: <!-- DELETE -->
+- NEVER include the "NN| " line-number prefixes from the input.
+- Do not wrap the output in backticks.
+- The other files are shown for context only — do not modify them.`
+
 export type OnDelta = (text: string) => void
 
 function buildUserContent(prompt: string, currentCode?: string): string {
@@ -89,6 +111,25 @@ export async function streamBuild(prompt: string, currentCode: string | undefine
 export async function runEditModel(prompt: string, numberedWorkspace: string): Promise<string> {
   const user = `Current project files with line numbers:\n\n${numberedWorkspace}\n\n---\nRequested edit: ${prompt}`
   return runModel(EDIT_SYSTEM, user, 0.2, () => {})
+}
+
+// Rewrite one highlighted span. The whole numbered workspace goes along for
+// context (a CSS class the span references may live in another file), but the
+// span itself is quoted verbatim so the model can't misidentify what to change.
+export async function runInlineEditModel(
+  instruction: string,
+  numberedWorkspace: string,
+  file: string,
+  start: number,
+  end: number,
+  selection: string
+): Promise<string> {
+  const span = start === end ? `line ${start}` : `lines ${start}-${end}`
+  const user =
+    `Project files with line numbers:\n\n${numberedWorkspace}\n\n---\n` +
+    `The user highlighted ${span} of ${file}. That text is exactly:\n\n${selection}\n\n---\n` +
+    `Requested change: ${instruction}`
+  return runModel(INLINE_SYSTEM, user, 0.2, () => {})
 }
 
 export function extractSummary(full: string): string | null {

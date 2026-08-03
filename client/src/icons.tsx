@@ -136,6 +136,18 @@ export const SaveIcon = (p: SVGProps<SVGSVGElement>) => (
     <path d="M7 3v5h8V3M7 21v-7h10v7" />
   </svg>
 )
+export const Globe = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3Z" />
+  </svg>
+)
+export const Pointer = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M5.5 3.2 18 10.4l-5.3 1.4-2.3 5.1-4.9-13.7Z" />
+    <path d="M13.5 13.5 19 19" />
+  </svg>
+)
 export const Download = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>
     <path d="M12 3v11M7.5 9.5 12 14l4.5-4.5" />

@@ -1,16 +1,20 @@
 import { Router, type Request, type Response } from 'express'
 import { prisma } from './db'
 import { authMiddleware } from './auth'
-import { streamBuild, extractSummary, runEditModel } from './ai'
+import { streamBuild, extractSummary, runEditModel, runInlineEditModel } from './ai'
 import {
   applyEditsToFiles,
   describeEdits,
+  normalizePath,
   numberWorkspace,
   parseEditOps,
+  parseInlineReplacement,
   parseWorkspace,
   prepareEdits,
   serializeWorkspace,
+  type LineEdit,
 } from './edits'
+import { makeSlug, publicUrl } from './publish'
 
 export const projectsRouter = Router()
 
@@ -83,6 +87,8 @@ projectsRouter.patch('/:id', async (req, res) => {
   const name = (req.body?.name ?? '').toString().trim().slice(0, 80)
   if (!name) return res.status(400).json({ error: 'Enter a project name.' })
   await prisma.project.update({ where: { id: req.params.id }, data: { name } })
+  // Keep the public page's title in step; a no-op when nothing is published.
+  await prisma.publication.updateMany({ where: { projectId: req.params.id }, data: { title: name } })
   res.json({ ok: true })
 })
 
@@ -102,6 +108,66 @@ projectsRouter.post('/:id/invite', async (req, res) => {
     update: {},
   })
   res.json({ ok: true, member: { id: invitee.id, name: invitee.name, color: invitee.color } })
+})
+
+// ── Publishing: a read-only public link for people with no Lumen account. ──
+// Publishing exposes the project to everyone who has the link, so it follows the
+// same rule as inviting a person: owner only. What is served is a snapshot taken
+// at publish time, not the live document — see publish.ts.
+
+const shapePublication = (
+  pub: { slug: string; views: number; createdAt: Date; updatedAt: Date },
+  req: Request
+) => ({ slug: pub.slug, url: publicUrl(req, pub.slug), views: pub.views, publishedAt: pub.createdAt, updatedAt: pub.updatedAt })
+
+// Where the project currently stands. Any member can see the link.
+projectsRouter.get('/:id/publish', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+  const pub = await prisma.publication.findUnique({ where: { projectId: req.params.id } })
+  res.json({ publication: pub ? shapePublication(pub, req) : null })
+})
+
+// Publish, or refresh an existing publication with the current code.
+projectsRouter.post('/:id/publish', async (req: Request, res: Response) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id } })
+  if (!project) return res.status(404).json({ error: 'Project not found.' })
+  if (project.ownerId !== uid(req)) return res.status(403).json({ error: 'Only the owner can publish this project.' })
+
+  const html = (req.body?.html ?? '').toString()
+  if (!html.trim()) return res.status(400).json({ error: 'There is nothing to publish yet — build something first.' })
+
+  const existing = await prisma.publication.findUnique({ where: { projectId: project.id } })
+  if (existing) {
+    // Re-publishing keeps the slug, so links already shared keep working.
+    const updated = await prisma.publication.update({
+      where: { id: existing.id },
+      data: { html, title: project.name },
+    })
+    return res.json({ publication: shapePublication(updated, req) })
+  }
+
+  // Fresh publication. A slug collision is vanishingly unlikely but cheap to retry.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const created = await prisma.publication.create({
+        data: { projectId: project.id, slug: makeSlug(project.name), title: project.name, html },
+      })
+      return res.json({ publication: shapePublication(created, req) })
+    } catch (err: any) {
+      if (err?.code !== 'P2002') throw err // anything but a uniqueness clash is real
+    }
+  }
+  res.status(500).json({ error: 'Could not allocate a public link. Please try again.' })
+})
+
+// Take it down. The link stops resolving immediately.
+projectsRouter.delete('/:id/publish', async (req, res) => {
+  const project = await prisma.project.findUnique({ where: { id: req.params.id } })
+  if (!project) return res.status(404).json({ error: 'Project not found.' })
+  if (project.ownerId !== uid(req)) return res.status(403).json({ error: 'Only the owner can unpublish this project.' })
+  await prisma.publication.deleteMany({ where: { projectId: project.id } })
+  res.json({ ok: true })
 })
 
 // Build history.
@@ -237,6 +303,52 @@ projectsRouter.post('/:id/edit', async (req: Request, res: Response) => {
       skipped: skipped.map((s) => s.reason),
       detail: describeEdits(applied),
     })
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || 'The edit did not complete.' })
+  }
+})
+
+// ── The inline-edit endpoint: the user highlighted a span and pressed Ctrl+K. ──
+// Nothing is inferred here. The client sends the exact file and line range it
+// selected, so there is no prompt regex to guess line numbers from and no line
+// operations to validate — the model rewrites that span and only that span.
+projectsRouter.post('/:id/inline-edit', async (req: Request, res: Response) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const instruction = (req.body?.instruction ?? '').toString()
+  const currentCode = (req.body?.currentCode ?? '').toString()
+  const file = normalizePath((req.body?.file ?? '').toString())
+  const start = Number(req.body?.start)
+  const end = Number(req.body?.end)
+
+  if (!instruction.trim()) return res.status(400).json({ error: 'Describe the change to make.' })
+
+  const files = parseWorkspace(currentCode)
+  if (!file || !(file in files)) return res.status(400).json({ error: 'That file is not part of this project.' })
+
+  const lines = files[file].split('\n')
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > lines.length) {
+    return res.status(400).json({ error: `${file} has ${lines.length} lines — that selection is out of range.` })
+  }
+
+  try {
+    const selection = lines.slice(start - 1, end).join('\n')
+    const raw = await runInlineEditModel(instruction, numberWorkspace(files), file, start, end, selection)
+    const content = parseInlineReplacement(raw)
+    if (content === null) {
+      return res.status(422).json({ error: "Lumen didn't return a replacement for that selection. Try wording the change differently." })
+    }
+
+    // Snapshot the result as a version, exactly as builds and line edits do.
+    const edit: LineEdit = { op: 'replace', file, start, end, content }
+    const updated = applyEditsToFiles(files, [edit])
+    await prisma.version.create({
+      data: { projectId: req.params.id, prompt: `${file} · ${start}-${end} — ${instruction}`, html: serializeWorkspace(updated) },
+    })
+    await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
+
+    res.json({ summary: extractSummary(raw), edit, detail: describeEdits([edit]) })
   } catch (err: any) {
     res.status(502).json({ error: err?.message || 'The edit did not complete.' })
   }

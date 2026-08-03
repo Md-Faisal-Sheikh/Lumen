@@ -9,6 +9,7 @@ import { env, isProd } from './env'
 import { authRouter } from './auth'
 import { projectsRouter } from './projects'
 import { chatsRouter } from './chats'
+import { publicRouter } from './publish'
 import { hocuspocus } from './collab'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -21,6 +22,9 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, provider: env.AI_PROV
 app.use('/api/auth', authRouter)
 app.use('/api/projects', projectsRouter)
 app.use('/api/chats', chatsRouter)
+// Published projects, open to anyone with the link. Mounted ahead of the SPA
+// fallback below so /p/<slug> resolves here rather than loading the editor.
+app.use('/p', publicRouter)
 
 // In production, serve the compiled client from the same origin.
 if (isProd) {

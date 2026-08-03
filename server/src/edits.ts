@@ -132,6 +132,45 @@ export function parseEditOps(raw: string): { ops: LineEdit[] } {
   return { ops }
 }
 
+// ── Inline (selection-scoped) edits ─────────────────────────────────
+// The inline editor answers with the replacement text for the highlighted span
+// rather than line operations, so parsing is just: drop the summary comment,
+// unwrap a stray code fence, strip line-number prefixes the model echoed back.
+//
+// Returns null when there is nothing usable — an empty answer must never be
+// mistaken for "delete the selection", which the model has to request outright
+// with a <!-- DELETE --> line. That distinction is the difference between a
+// failed request and silently erasing the user's code.
+const INLINE_DELETE_RE = /^\s*<!--\s*DELETE\s*-->\s*$/i
+// Deliberately the same shape extractSummary() uses, including spanning lines:
+// if the two disagreed about where the summary ends, the leftover would be
+// written into the user's file as code.
+const INLINE_SUMMARY_RE = /<!--\s*SUMMARY:[\s\S]*?-->/i
+
+export function parseInlineReplacement(raw: string): string | null {
+  const summary = raw.match(INLINE_SUMMARY_RE)
+  let lines = (summary ? raw.slice((summary.index ?? 0) + summary[0].length) : raw).split('\n')
+
+  const trim = () => {
+    while (lines.length && !lines[0].trim()) lines.shift()
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop()
+  }
+  trim()
+  if (lines.length === 1 && INLINE_DELETE_RE.test(lines[0])) return ''
+  if (lines.length >= 2 && FENCE_RE.test(lines[0]) && FENCE_RE.test(lines[lines.length - 1])) {
+    lines = lines.slice(1, -1)
+    trim()
+  }
+  if (lines.length === 0) return null
+  if (lines.length === 1 && INLINE_DELETE_RE.test(lines[0])) return ''
+
+  const nonEmpty = lines.filter((l) => l.trim())
+  if (nonEmpty.every((l) => /^\s*\d+\|\s?/.test(l))) {
+    lines = lines.map((l) => l.replace(/^\s*\d+\|\s?/, ''))
+  }
+  return lines.join('\n')
+}
+
 // ── Validation + ordering ───────────────────────────────────────────
 
 export interface SkippedEdit {

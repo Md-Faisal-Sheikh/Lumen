@@ -46,6 +46,14 @@ export interface ProjectSummary {
   role?: string
   updatedAt?: string
 }
+export interface Publication {
+  slug: string
+  /** Absolute link to hand out — works without a Lumen account. */
+  url: string
+  views: number
+  publishedAt: string
+  updatedAt: string
+}
 export interface ChatSessionSummary {
   id: string
   title: string
@@ -78,6 +86,15 @@ export const api = {
     req<{ summary: string | null; edits: LineEdit[]; skipped: string[]; detail: string }>(`/api/projects/${id}/edit`, {
       method: 'POST',
       body: JSON.stringify({ prompt, currentCode }),
+    }),
+  publication: (id: string) => req<{ publication: Publication | null }>(`/api/projects/${id}/publish`),
+  publish: (id: string, html: string) =>
+    req<{ publication: Publication }>(`/api/projects/${id}/publish`, { method: 'POST', body: JSON.stringify({ html }) }),
+  unpublish: (id: string) => req<{ ok: true }>(`/api/projects/${id}/publish`, { method: 'DELETE' }),
+  inlineEdit: (id: string, body: { file: string; start: number; end: number; instruction: string; currentCode: string }) =>
+    req<{ summary: string | null; edit: LineEdit; detail: string }>(`/api/projects/${id}/inline-edit`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
   chats: (projectId?: string) =>
     req<{ sessions: ChatSessionSummary[] }>(`/api/chats${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),

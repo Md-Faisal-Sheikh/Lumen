@@ -4,7 +4,8 @@ import { useYArray, useYMap } from '../yhooks'
 import { api } from '../api'
 import { Composer } from './Composer'
 import { ChatHistory } from './ChatHistory'
-import { HistoryIcon, Spark } from '../icons'
+import { HistoryIcon, Pointer, Spark } from '../icons'
+import type { PickedElement } from '../picker'
 
 interface Message {
   id: string
@@ -16,6 +17,7 @@ interface Message {
   fromCache?: boolean // build served straight from the database cache
   hasEdit?: boolean // precise line edit (no rebuild)
   editNote?: string // e.g. "index.html · line 14"
+  context?: string // what the message was aimed at: "button.cta" or "app.js · lines 3–5"
   ts?: number
 }
 
@@ -33,11 +35,15 @@ export function Conversation({
   messages,
   meta,
   onBuild,
+  target,
+  onClearTarget,
 }: {
   projectId: string
   messages: Y.Array<Y.Map<any>>
   meta: Y.Map<any>
   onBuild: (prompt: string) => void
+  target?: PickedElement | null
+  onClearTarget?: () => void
 }) {
   const list = useYArray<Message>(messages)
   const metaState = useYMap(meta)
@@ -175,6 +181,12 @@ export function Conversation({
             </div>
             <div className="msg-body">
               <div className="msg-name">{m.role === 'assistant' ? 'Lumen' : m.role === 'error' ? 'Lumen' : m.authorName || 'You'}</div>
+              {m.context && (
+                <div className="msg-context" title={m.context}>
+                  <Pointer width={11} height={11} />
+                  <code>{m.context}</code>
+                </div>
+              )}
               <div className="msg-text">{m.text}</div>
               {m.hasBuild && (
                 <div className="buildcard">
@@ -225,7 +237,7 @@ export function Conversation({
         )}
       </div>
 
-      <Composer onBuild={onBuild} building={building} />
+      <Composer onBuild={onBuild} building={building} target={target} onClearTarget={onClearTarget} />
 
       {historyOpen && <ChatHistory onClose={() => setHistoryOpen(false)} />}
     </section>

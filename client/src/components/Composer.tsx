@@ -1,9 +1,21 @@
 import { useRef, useState } from 'react'
-import { Send, Mic } from '../icons'
+import { Send, Mic, Pointer, Close } from '../icons'
 import { useDictation } from '../speech'
 import { toast } from '../toast'
+import type { PickedElement } from '../picker'
 
-export function Composer({ onBuild, building }: { onBuild: (prompt: string) => void; building: boolean }) {
+export function Composer({
+  onBuild,
+  building,
+  target,
+  onClearTarget,
+}: {
+  onBuild: (prompt: string) => void
+  building: boolean
+  /** Element picked in the preview — the next message is about this, not the whole app. */
+  target?: PickedElement | null
+  onClearTarget?: () => void
+}) {
   const [value, setValue] = useState('')
   const ref = useRef<HTMLTextAreaElement>(null)
 
@@ -40,9 +52,27 @@ export function Composer({ onBuild, building }: { onBuild: (prompt: string) => v
     }
   }
 
+  const placeholder = listening
+    ? 'Listening… speak your idea'
+    : building
+      ? 'Building…'
+      : target
+        ? `Change this ${target.label}…`
+        : 'Describe an app, or a change to make…'
+
   return (
     <div className="composer">
-      <div className={`composer-box ${listening ? 'listening' : ''}`}>
+      {target && (
+        <div className="target-chip">
+          <Pointer width={12} height={12} />
+          <code>{target.label}</code>
+          {target.text && <span className="tc-text">“{target.text}”</span>}
+          <button onClick={onClearTarget} title="Stop editing this element" aria-label="Stop editing this element">
+            <Close width={12} height={12} />
+          </button>
+        </div>
+      )}
+      <div className={`composer-box ${listening ? 'listening' : ''} ${target ? 'targeted' : ''}`}>
         <textarea
           ref={ref}
           value={value}
@@ -52,7 +82,7 @@ export function Composer({ onBuild, building }: { onBuild: (prompt: string) => v
           }}
           onKeyDown={onKey}
           rows={1}
-          placeholder={listening ? 'Listening… speak your idea' : building ? 'Building…' : 'Describe an app, or a change to make…'}
+          placeholder={placeholder}
           disabled={building}
         />
         {supported && (

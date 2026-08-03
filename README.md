@@ -17,7 +17,10 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 - **Real-time collaboration** — code, chat, and a live preview are shared through a CRDT. Everyone in a project sees edits, messages, and each other's cursors instantly.
 - **Watch it build** — generated code streams token-by-token into a shared editor, so collaborators see the app being written in real time.
 - **Iterate by conversation** — every follow-up ("make the header sticky", "use a dark theme") modifies the running app.
+- **Point at it instead of describing it** — arm the picker, hover the live preview to outline elements, and click one. The chat then knows exactly which element you mean, so *"make it bigger and green"* lands on that button and nothing else.
+- **Inline edits with Ctrl+K** — select lines in the editor, press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, and say what to change. Because the exact line range travels with the request, only those lines are rewritten — the rest of the file stays byte-identical.
 - **Voice mode** — tap the mic to *speak* your idea instead of typing, and optionally have Lumen read its replies back aloud. Powered by the browser's built-in Web Speech API — free, no key, nothing to install.
+- **Publish to a public link** — one click gives the project a `/p/<slug>` page that *anyone* can open. No account, no sign-in, nothing to install — just send the link.
 - **Export as a real project** — one click downloads a `.zip` of actual files in actual folders: `index.html`, `styles.css`, `app.js`, `styles/theme.css`. Unzip it and double-click `index.html`; there's no build step and nothing to install. The archive is written in the browser by hand — no library, no server round-trip.
 - **Accounts, projects & history** — sign in, create projects, invite teammates, and every build is snapshotted as a version.
 
@@ -81,11 +84,36 @@ Create an account, then start describing apps.
 
 Open the app in **two browser windows** (or share the project link via the **Share** button and have a teammate open it). Type in one — the code, chat, preview, and cursors all update live in the other.
 
-> Sharing adds people by their Lumen email, so each collaborator needs an account first. The **Share** button invites them and copies the project link.
+> Collaborators are added by their Lumen email, so each one needs an account first. The **Share** button opens a dialog that invites them and hands you the project link — or publishes a public page for people who aren't collaborating at all (below).
 
 ### Voice mode
 
 Tap the **mic** in the composer and speak — your words are transcribed into the prompt for you to review, then send. Toggle the **speaker** button in the top bar to have Lumen read its replies aloud. Voice uses the browser's native Web Speech API (best support in Chrome, Edge, and Safari); if a browser doesn't support it, the mic simply doesn't appear and typing works as normal.
+
+### Publishing to a public link
+
+**Share** now does two different jobs, and the dialog separates them:
+
+- **Invite a collaborator** — they edit the code, chat and preview with you live, so they need a Lumen account.
+- **Publish to the web** — a read-only page at `http://localhost:4000/p/neon-snake-k4m2xqp` that works for *anyone* with the link. No account, no sign-in.
+
+Publishing stores a **snapshot** taken when you press the button, not the live document — so half-finished work is never exposed and the link keeps working while you keep building. Press *Update to current code* when you want the public page to catch up. The slug never changes, so links you have already sent stay valid. *Unpublish* takes it down immediately.
+
+Publishing is owner-only, matching how invites work: both hand access to someone who doesn't have it.
+
+> **A note on how this is served.** The published page is HTML and JavaScript that a *user* wrote, hosted on the server's own origin. Served naively that is stored XSS — a published app could read the `localStorage` of any signed-in Lumen user who opened the link and walk off with their token. So the app never executes on that origin. `/p/<slug>` is a small page Lumen authors, which frames the project in an iframe with no `allow-same-origin`; `/p/<slug>/app` serves the raw project with a `Content-Security-Policy: sandbox` header so it stays on an opaque origin even if opened directly. Either layer alone would contain it. The sandbox flags match the in-app preview exactly, so a published app behaves just as it did while you were building it.
+
+### Editing precisely
+
+Two ways to change one thing without regenerating the app:
+
+**Ctrl+K in the editor.** Select some lines, press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, and a prompt opens over the selection. The request carries the file and the exact line range, so the model is asked to rewrite *that span* and answers with the replacement text — not a whole file and not line operations to be re-parsed. The reply is swapped in with a ranged replace, so collaborators editing elsewhere in the same file keep their cursors and the untouched lines are never rewritten.
+
+> Typing *"change line 14 in index.html"* into the chat still works — that path infers the range from your wording. Ctrl+K skips the inference entirely because the editor already knows what you highlighted.
+
+**Click-to-edit in the preview.** Hit the pointer button in the preview toolbar and the running app becomes selectable: hovering outlines elements, and clicking one stages it in the composer as a chip. Your next message is scoped to that element — Lumen receives its CSS selector and current markup along with your words, so *"make it bigger and green"* can't land on the wrong node.
+
+The picker is a small script injected into the preview document only. It stays inert until armed, swallows the click sequence so picking never fires the app's own buttons, and never touches the project's real files — it isn't in the editor, in a version snapshot, or in the exported ZIP. The preview iframe is sandboxed without `allow-same-origin`, so the two sides talk purely over `postMessage` and the parent authenticates replies by window identity.
 
 ### Take the project with you
 
@@ -110,6 +138,7 @@ The archive is assembled in the browser by `client/src/zip.ts`, a from-scratch Z
 |---|---|---|
 | `PORT` | `4000` | HTTP + WebSocket port |
 | `CLIENT_ORIGIN` | `http://localhost:5173` | for CORS in dev |
+| `PUBLIC_URL` | — | origin published `/p/<slug>` links are built from; blank = use the request host |
 | `JWT_SECRET` | — | **set a long random string** |
 | `DATABASE_URL` | `file:./dev.db` | SQLite by default |
 | `AI_PROVIDER` | `openrouter` | `openrouter` \| `gemini` \| `ollama` |

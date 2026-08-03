@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as Y from 'yjs'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import { api, getToken, WS_URL, API_URL, type ProjectSummary } from './api'
@@ -21,10 +21,12 @@ import {
   type LineEdit,
 } from './files'
 import { createZip, downloadBlob } from './zip'
+import { describeTarget, instrumentPreview, type PickedElement } from './picker'
 import { TopBar } from './components/TopBar'
 import { Conversation } from './components/Conversation'
 import { PreviewPane } from './components/PreviewPane'
 import { FileExplorer } from './components/FileExplorer'
+import { ShareDialog } from './components/ShareDialog'
 
 const uid = () => Math.random().toString(36).slice(2, 10)
 
@@ -160,7 +162,13 @@ function Room({
   const [tab, setTab] = useState<'preview' | 'code'>('preview')
   const [voiceOut, setVoiceOut] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [pickTarget, setPickTarget] = useState<PickedElement | null>(null)
   const wasBuilding = useRef(false)
+  // An inline edit changes a few lines the user is looking at — refresh the
+  // preview when it lands, but don't yank them off the code tab to show it.
+  const stayOnCode = useRef(false)
 
   // If the file we're editing is deleted by a collaborator, fall back to index.html.
   useEffect(() => {
@@ -177,7 +185,10 @@ function Room({
     return snap
   }
 
-  const assemble = () => assemblePreview(ytext.toString(), filesSnapshot())
+  // The preview document = the workspace inlined into one page, plus the element
+  // picker. Instrumentation lives only in this string — never in the Yjs files,
+  // the version snapshots, or the exported ZIP.
+  const assemble = () => instrumentPreview(assemblePreview(ytext.toString(), filesSnapshot()))
 
   // Identify ourselves to other people in the room (drives cursors + presence).
   // Re-announces on profile edits, so keep it separate from the teardown below —
@@ -198,7 +209,7 @@ function Room({
   useEffect(() => {
     const onSynced = () => {
       const code = ytext.toString()
-      if (code && !ymeta.get('building')) setPreviewCode(assemblePreview(code, filesSnapshot()))
+      if (code && !ymeta.get('building')) setPreviewCode(assemble())
     }
     provider.on('synced', onSynced)
     return () => {
@@ -211,7 +222,8 @@ function Room({
   useEffect(() => {
     if (wasBuilding.current && !building) {
       setPreviewCode(assemble())
-      setTab('preview')
+      if (!stayOnCode.current) setTab('preview')
+      stayOnCode.current = false
     }
     wasBuilding.current = building
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,13 +307,27 @@ function Room({
   const runBuild = async (prompt: string) => {
     if (ymeta.get('building')) return
     const indexNow = ytext.toString()
+    const target = pickTarget
     // Prompts that name specific line numbers become precise line edits —
-    // nothing is cleared or regenerated, only the named lines change.
-    if (indexNow.trim() && isLineEditPrompt(prompt)) return runLineEdit(prompt)
+    // nothing is cleared or regenerated, only the named lines change. A picked
+    // element already names its own target, so it never takes that path.
+    if (!target && indexNow.trim() && isLineEditPrompt(prompt)) return runLineEdit(prompt)
     // Hand the model every current file (marker format) so it can modify the project.
     const currentCode = indexNow.trim() ? serializeWorkspace(indexNow, filesSnapshot()) : ''
+    // What the user typed is what the chat shows; the model gets the element too.
+    const request = target ? describeTarget(target, prompt) : prompt
+    setPickTarget(null)
+    setPicking(false)
 
-    pushMessage({ id: uid(), role: 'user', authorName: user!.name, color: user!.color, text: prompt, ts: Date.now() })
+    pushMessage({
+      id: uid(),
+      role: 'user',
+      authorName: user!.name,
+      color: user!.color,
+      text: prompt,
+      context: target?.label,
+      ts: Date.now(),
+    })
     ydoc.transact(() => {
       ymeta.set('building', { by: user!.name, color: user!.color, at: Date.now() })
       ytext.delete(0, ytext.length)
@@ -330,7 +356,7 @@ function Room({
       const res = await fetch(`${API_URL}/api/projects/${projectId}/build`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-        body: JSON.stringify({ prompt, currentCode }),
+        body: JSON.stringify({ prompt: request, currentCode }),
       })
       if (!res.ok || !res.body) throw new Error('The build could not start.')
 
@@ -451,6 +477,61 @@ function Room({
     }
   }
 
+  // Ctrl-K in the editor. The user highlighted an exact span, so its bounds
+  // travel with the request and the reply replaces exactly those lines — no
+  // line numbers inferred from wording, nothing else in the file disturbed.
+  // Rejects on failure so the editor keeps its prompt open for a reword.
+  const runInlineEdit = async (file: string, start: number, end: number, instruction: string) => {
+    if (ymeta.get('building')) {
+      toast('Wait for the current change to finish.')
+      throw new Error('Something else is already running.')
+    }
+    const currentCode = serializeWorkspace(ytext.toString(), filesSnapshot())
+    const span = start === end ? `line ${start}` : `lines ${start}–${end}`
+    stayOnCode.current = true
+
+    pushMessage({
+      id: uid(),
+      role: 'user',
+      authorName: user!.name,
+      color: user!.color,
+      text: instruction,
+      context: `${file} · ${span}`,
+      ts: Date.now(),
+    })
+    ydoc.transact(() => ymeta.set('building', { by: user!.name, color: user!.color, at: Date.now(), mode: 'edit' }))
+
+    try {
+      const { summary, edit, detail } = await api.inlineEdit(projectId, { file, start, end, instruction, currentCode })
+      const text = file === INDEX_FILE ? ytext : yfiles.get(file)
+      if (!text) throw new Error('That file was removed from the project.')
+      // Ranged replace: collaborators editing elsewhere in the file keep their
+      // cursors, and the untouched lines stay byte-identical.
+      ydoc.transact(() => replaceTextRanged(text, applyOpsToContent(text.toString(), [edit])))
+
+      const reply = summary || `Updated ${detail}.`
+      pushMessage({ id: uid(), role: 'assistant', text: reply, hasEdit: true, editNote: detail, ts: Date.now() })
+      if (voiceOut) speak(reply)
+    } catch (err: any) {
+      pushMessage({
+        id: uid(),
+        role: 'error',
+        text: `That edit didn't go through: ${err?.message || 'the request failed'}`,
+        ts: Date.now(),
+      })
+      throw err
+    } finally {
+      ydoc.transact(() => ymeta.set('building', null))
+    }
+  }
+
+  // Picking is one-shot: choosing an element disarms the picker and stages it
+  // for the next message, so the chat is where you say what to do with it.
+  const onPick = useCallback((el: PickedElement) => {
+    setPickTarget(el)
+    setPicking(false)
+  }, [])
+
   const runPreview = () => {
     setPreviewCode(assemble())
     setTab('preview')
@@ -486,23 +567,10 @@ function Room({
     }
   }
 
-  const share = async () => {
-    const email = window.prompt('Invite a teammate by their Lumen email')
-    if (!email) {
-      navigator.clipboard?.writeText(`${location.origin}?p=${projectId}`).then(
-        () => toast('Project link copied'),
-        () => {}
-      )
-      return
-    }
-    try {
-      await api.invite(projectId, email.trim())
-      await navigator.clipboard?.writeText(`${location.origin}?p=${projectId}`).catch(() => {})
-      toast(`Invited ${email.trim()} · link copied`)
-    } catch (e: any) {
-      toast(e?.message || 'Could not invite that person.')
-    }
-  }
+  // What a published page serves: the app assembled exactly as the preview
+  // assembles it, minus the element picker — that script exists only for the
+  // in-app iframe and has no business on someone else's public link.
+  const publishableHtml = () => assemblePreview(ytext.toString(), filesSnapshot())
 
   const toggleVoice = () => {
     setVoiceOut((on) => {
@@ -548,7 +616,7 @@ function Room({
         projectId={projectId}
         onSwitch={onSwitch}
         onNew={onNew}
-        onShare={share}
+        onShare={() => setShareOpen(true)}
         onRun={runPreview}
         onExport={exportZip}
         exporting={exporting}
@@ -592,6 +660,10 @@ function Room({
           activeText={textFor(activeFile)}
           awareness={provider.awareness}
           onRun={runPreview}
+          onInlineEdit={runInlineEdit}
+          picking={picking}
+          onPicking={setPicking}
+          onPick={onPick}
         />
         <div
           className="splitter"
@@ -603,8 +675,25 @@ function Room({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         />
-        <Conversation projectId={projectId} messages={ychat} meta={ymeta} onBuild={runBuild} />
+        <Conversation
+          projectId={projectId}
+          messages={ychat}
+          meta={ymeta}
+          onBuild={runBuild}
+          target={pickTarget}
+          onClearTarget={() => setPickTarget(null)}
+        />
       </div>
+      {shareOpen && (
+        <ShareDialog
+          projectId={projectId}
+          projectName={projectName}
+          isOwner={projects.find((p) => p.id === projectId)?.ownerId === user!.id}
+          publishableHtml={publishableHtml}
+          hasApp={hasIndex}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
     </div>
   )
 }
