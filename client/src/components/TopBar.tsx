@@ -3,7 +3,7 @@ import { useAuth } from '../auth'
 import { useAwareness } from '../yhooks'
 import { type ProjectSummary } from '../api'
 import { toast } from '../toast'
-import { Spark, Share, Play, Plus, SignOut, Volume, VolumeOff } from '../icons'
+import { Spark, Share, Play, Plus, SignOut, Volume, VolumeOff, Download } from '../icons'
 
 const initials = (name: string) =>
   name
@@ -24,6 +24,8 @@ export function TopBar({
   onNew,
   onShare,
   onRun,
+  onExport,
+  exporting,
   awareness,
   voiceOut,
   onToggleVoice,
@@ -35,6 +37,8 @@ export function TopBar({
   onNew: () => void
   onShare: () => void
   onRun: () => void
+  onExport: () => void
+  exporting: boolean
   awareness: any
   voiceOut: boolean
   onToggleVoice: () => void
@@ -211,6 +215,15 @@ export function TopBar({
 
       <button className="btn ghost" onClick={onRun}>
         <Play width={14} height={14} /> Run
+      </button>
+      <button
+        className="btn ghost icon"
+        onClick={onExport}
+        disabled={exporting}
+        title="Download the project as a .zip — real files, real folders"
+        aria-label="Download the project as a ZIP file"
+      >
+        <Download width={16} height={16} />
       </button>
       {voiceOutSupported && (
         <button

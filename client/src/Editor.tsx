@@ -10,6 +10,8 @@ import {
   applyOpsToContent,
   assemblePreview,
   createBuildWriter,
+  exportEntries,
+  exportFileName,
   INDEX_FILE,
   isLineEditPrompt,
   normalizePath,
@@ -18,6 +20,7 @@ import {
   starterContent,
   type LineEdit,
 } from './files'
+import { createZip, downloadBlob } from './zip'
 import { TopBar } from './components/TopBar'
 import { Conversation } from './components/Conversation'
 import { PreviewPane } from './components/PreviewPane'
@@ -156,6 +159,7 @@ function Room({
   const [previewCode, setPreviewCode] = useState('')
   const [tab, setTab] = useState<'preview' | 'code'>('preview')
   const [voiceOut, setVoiceOut] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const wasBuilding = useRef(false)
 
   // If the file we're editing is deleted by a collaborator, fall back to index.html.
@@ -452,6 +456,36 @@ function Room({
     setTab('preview')
   }
 
+  const projectName = projects.find((p) => p.id === projectId)?.name ?? 'Project'
+
+  // Download the workspace as a real .zip: every file at its real path, folders
+  // intact, no build step — unzip it and open index.html. Packaged in the
+  // browser from the live Yjs document, so it always matches what's on screen.
+  const exportZip = async () => {
+    if (exporting) return
+    // Mid-build the files are still being streamed in — packaging now would
+    // hand the user a half-written project.
+    if (building) {
+      toast('Hold on — Lumen is still writing the files.')
+      return
+    }
+    const entries = exportEntries(ytext.toString(), filesSnapshot())
+    if (entries.length === 0) {
+      toast('Nothing to export yet — describe an app in the chat first.')
+      return
+    }
+    setExporting(true)
+    try {
+      const blob = await createZip(entries)
+      downloadBlob(blob, exportFileName(projectName))
+      toast(`Exported ${entries.length} file${entries.length === 1 ? '' : 's'}`)
+    } catch (e: any) {
+      toast(e?.message || 'Could not package the project.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const share = async () => {
     const email = window.prompt('Invite a teammate by their Lumen email')
     if (!email) {
@@ -507,8 +541,6 @@ function Room({
     dragRef.current = null
   }
 
-  const projectName = projects.find((p) => p.id === projectId)?.name ?? 'Project'
-
   return (
     <div className="app">
       <TopBar
@@ -518,6 +550,8 @@ function Room({
         onNew={onNew}
         onShare={share}
         onRun={runPreview}
+        onExport={exportZip}
+        exporting={exporting}
         awareness={provider.awareness}
         voiceOut={voiceOut}
         onToggleVoice={toggleVoice}

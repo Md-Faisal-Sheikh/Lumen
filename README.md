@@ -18,6 +18,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 - **Watch it build** — generated code streams token-by-token into a shared editor, so collaborators see the app being written in real time.
 - **Iterate by conversation** — every follow-up ("make the header sticky", "use a dark theme") modifies the running app.
 - **Voice mode** — tap the mic to *speak* your idea instead of typing, and optionally have Lumen read its replies back aloud. Powered by the browser's built-in Web Speech API — free, no key, nothing to install.
+- **Export as a real project** — one click downloads a `.zip` of actual files in actual folders: `index.html`, `styles.css`, `app.js`, `styles/theme.css`. Unzip it and double-click `index.html`; there's no build step and nothing to install. The archive is written in the browser by hand — no library, no server round-trip.
 - **Accounts, projects & history** — sign in, create projects, invite teammates, and every build is snapshotted as a version.
 
 ## Tech stack (all free / open-source)
@@ -31,6 +32,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 | API | Node + Express | open-source |
 | Auth | JWT + bcrypt (local) | no external auth provider |
 | Database | Prisma + **SQLite** (swap to Postgres) | file-based, zero-config |
+| Export | hand-written ZIP writer + the browser's `CompressionStream` | no dependency, no server |
 
 ```
 ┌──────────────┐    REST + SSE (build stream)    ┌───────────────────────────┐
@@ -84,6 +86,23 @@ Open the app in **two browser windows** (or share the project link via the **Sha
 ### Voice mode
 
 Tap the **mic** in the composer and speak — your words are transcribed into the prompt for you to review, then send. Toggle the **speaker** button in the top bar to have Lumen read its replies aloud. Voice uses the browser's native Web Speech API (best support in Chrome, Edge, and Safari); if a browser doesn't support it, the mic simply doesn't appear and typing works as normal.
+
+### Take the project with you
+
+The **download** button in the top bar packages the workspace as `your-project.zip` — every file at its real path, folders intact:
+
+```
+neon-snake/
+├── index.html      ← open this
+├── styles.css
+├── app.js
+└── styles/
+    └── theme.css
+```
+
+That's the whole app. Unzip it and open `index.html`, drop the folder onto Netlify or GitHub Pages, or commit it — no bundler, no `npm install`, no Lumen required.
+
+The archive is assembled in the browser by `client/src/zip.ts`, a from-scratch ZIP writer: CRC-32 checksums, DEFLATE via the platform's `CompressionStream`, local headers, a central directory, and the end-of-central-directory record. No JSZip, no upload, no server round-trip — which also means exporting works offline and costs nothing to host. Browsers without `CompressionStream` (older Safari) transparently get a valid uncompressed archive instead.
 
 ## Configuration (`server/.env`)
 

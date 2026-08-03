@@ -2,6 +2,7 @@
 // and assembling the sandboxed preview from index.html + supporting files.
 
 import type * as Y from 'yjs'
+import type { ZipEntry } from './zip'
 
 export const INDEX_FILE = 'index.html'
 
@@ -246,4 +247,32 @@ export function assemblePreview(indexHtml: string, files: Record<string, string>
   })
 
   return out
+}
+
+// ── Export ──────────────────────────────────────────────────────────
+// The preview inlines everything into one document, but the project on disk is
+// the real thing: separate files at their real paths. These build that list for
+// the ZIP writer — nothing is merged, rewritten, or flattened.
+
+// index.html first (it's the page you open), then every other file by path.
+// Sorted by code unit rather than locale so the archive is byte-deterministic.
+// Empty files are kept: a file someone created is part of their project.
+export function exportEntries(indexHtml: string, files: Record<string, string>): ZipEntry[] {
+  const entries: ZipEntry[] = []
+  if (indexHtml.trim()) entries.push({ path: INDEX_FILE, content: indexHtml })
+  for (const path of Object.keys(files).filter((p) => p !== INDEX_FILE).sort()) {
+    entries.push({ path, content: files[path] })
+  }
+  return entries
+}
+
+// "My First Project" → "my-first-project.zip"
+export function exportFileName(projectName: string): string {
+  const slug = projectName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/, '')
+  return `${slug || 'lumen-project'}.zip`
 }
