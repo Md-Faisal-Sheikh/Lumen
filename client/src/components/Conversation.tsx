@@ -4,7 +4,7 @@ import { useYArray, useYMap } from '../yhooks'
 import { api } from '../api'
 import { Composer } from './Composer'
 import { ChatHistory } from './ChatHistory'
-import { HistoryIcon, Pointer, Spark } from '../icons'
+import { HistoryIcon, Pointer, Recycle, Spark } from '../icons'
 import type { PickedElement } from '../picker'
 
 interface Message {
@@ -15,6 +15,9 @@ interface Message {
   color?: string
   hasBuild?: boolean
   fromCache?: boolean // build served straight from the database cache
+  reusedFrom?: string // the cached prompt this matched, when it wasn't word-for-word
+  similarity?: number // how close the two prompts scored, 0..1
+  prompt?: string // what was asked, so the build can be re-run without the cache
   hasEdit?: boolean // precise line edit (no rebuild)
   editNote?: string // e.g. "index.html · line 14"
   context?: string // what the message was aimed at: "button.cta" or "app.js · lines 3–5"
@@ -35,6 +38,7 @@ export function Conversation({
   messages,
   meta,
   onBuild,
+  onRebuild,
   target,
   onClearTarget,
 }: {
@@ -42,6 +46,8 @@ export function Conversation({
   messages: Y.Array<Y.Map<any>>
   meta: Y.Map<any>
   onBuild: (prompt: string) => void
+  /** Re-run a prompt with the build cache bypassed. */
+  onRebuild?: (prompt: string) => void
   target?: PickedElement | null
   onClearTarget?: () => void
 }) {
@@ -188,17 +194,40 @@ export function Conversation({
                 </div>
               )}
               <div className="msg-text">{m.text}</div>
-              {m.hasBuild && (
-                <div className="buildcard">
-                  <div className="bc-icon">
-                    <Spark width={14} height={14} />
+              {m.hasBuild &&
+                (m.reusedFrom ? (
+                  /* A loose cache match. Say so plainly, show what it matched,
+                     and never leave "that's not what I asked for" as a dead end. */
+                  <div className="buildcard reused">
+                    <div className="bc-icon">
+                      <Recycle width={14} height={14} />
+                    </div>
+                    <div className="bc-main">
+                      <div className="bc-t">
+                        Reused a similar build
+                        {typeof m.similarity === 'number' && <span className="bc-score">{Math.round(m.similarity * 100)}% match</span>}
+                      </div>
+                      <div className="bc-s">
+                        Someone already built <q>{m.reusedFrom}</q> — served instantly, no AI call.
+                      </div>
+                      {m.prompt && onRebuild && (
+                        <button className="bc-action" onClick={() => onRebuild(m.prompt!)} disabled={building}>
+                          Not what you meant? Build a fresh one
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <div className="bc-t">App updated</div>
-                    <div className="bc-s">{m.fromCache ? 'Served instantly from the build library' : 'Running live in the preview'}</div>
+                ) : (
+                  <div className="buildcard">
+                    <div className="bc-icon">
+                      <Spark width={14} height={14} />
+                    </div>
+                    <div>
+                      <div className="bc-t">App updated</div>
+                      <div className="bc-s">{m.fromCache ? 'Served instantly from the build library' : 'Running live in the preview'}</div>
+                    </div>
                   </div>
-                </div>
-              )}
+                ))}
               {m.hasEdit && (
                 <div className="buildcard">
                   <div className="bc-icon">

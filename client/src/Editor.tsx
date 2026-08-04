@@ -164,6 +164,8 @@ function Room({
   const [exporting, setExporting] = useState(false)
   const [picking, setPicking] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  // Bumped after every build so the cache stats in the explorer refresh.
+  const [cacheTick, setCacheTick] = useState(0)
   const [pickTarget, setPickTarget] = useState<PickedElement | null>(null)
   const wasBuilding = useRef(false)
   // An inline edit changes a few lines the user is looking at — refresh the
@@ -304,7 +306,7 @@ function Room({
   // The build: stream generated code into the shared Yjs files so everyone watches it write.
   // The model emits `===== FILE: path =====` sections; the writer splits the stream into
   // index.html, styles.css, app.js, … live, so files pop into the explorer as they're written.
-  const runBuild = async (prompt: string) => {
+  const runBuild = async (prompt: string, opts?: { noCache?: boolean }) => {
     if (ymeta.get('building')) return
     const indexNow = ytext.toString()
     const target = pickTarget
@@ -356,7 +358,7 @@ function Room({
       const res = await fetch(`${API_URL}/api/projects/${projectId}/build`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-        body: JSON.stringify({ prompt: request, currentCode }),
+        body: JSON.stringify({ prompt: request, currentCode, noCache: opts?.noCache === true }),
       })
       if (!res.ok || !res.body) throw new Error('The build could not start.')
 
@@ -367,6 +369,8 @@ function Room({
       let lastFlush = 0
       let summary: string | null = null
       let fromCache = false
+      let reusedFrom: string | null = null
+      let similarity: number | null = null
 
       const flush = (force: boolean) => {
         const now = Date.now()
@@ -402,6 +406,8 @@ function Room({
           } else if (obj.done) {
             summary = obj.summary ?? null
             fromCache = obj.cached === true
+            reusedFrom = typeof obj.reusedFrom === 'string' ? obj.reusedFrom : null
+            similarity = typeof obj.similarity === 'number' ? obj.similarity : null
           }
         }
       }
@@ -414,6 +420,11 @@ function Room({
         text: reply,
         hasBuild: true,
         fromCache,
+        // Only set when the cache matched loosely — the chat has to say so, and
+        // offer a way out, rather than quietly serving somebody else's app.
+        reusedFrom,
+        similarity,
+        prompt,
         ts: Date.now(),
       })
       if (voiceOut) speak(reply)
@@ -426,8 +437,13 @@ function Room({
       })
     } finally {
       ydoc.transact(() => ymeta.set('building', null))
+      setCacheTick((n) => n + 1)
     }
   }
+
+  // The reused build wasn't what they meant. Run the same prompt again with the
+  // cache bypassed, so they get one generated for them.
+  const rebuildFresh = (prompt: string) => runBuild(prompt, { noCache: true })
 
   // Precise line edits: the server turns "change line 14 in index.html" into
   // validated line operations against a snapshot of the current files, and we
@@ -639,6 +655,7 @@ function Room({
           onCreate={createFile}
           onRename={renameFile}
           onDelete={deleteFile}
+          cacheTick={cacheTick}
         />
         <div
           className="splitter"
@@ -680,6 +697,7 @@ function Room({
           messages={ychat}
           meta={ymeta}
           onBuild={runBuild}
+          onRebuild={rebuildFresh}
           target={pickTarget}
           onClearTarget={() => setPickTarget(null)}
         />

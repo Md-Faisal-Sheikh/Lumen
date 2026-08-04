@@ -136,6 +136,13 @@ export const SaveIcon = (p: SVGProps<SVGSVGElement>) => (
     <path d="M7 3v5h8V3M7 21v-7h10v7" />
   </svg>
 )
+export const Recycle = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4.8 15.5 3.4 18a2 2 0 0 0 1.7 3H9M19.2 15.5 20.6 18a2 2 0 0 1-1.7 3H10" />
+    <path d="M9.9 5.4 8.5 7.9M14.1 5.4a2 2 0 0 0-3.4 0L8.5 9.3M15.5 7.9 20 15.6" />
+    <path d="M6.6 12.2 3.9 16.9M11 21l2.2-2.4L11 16.2" />
+  </svg>
+)
 export const Globe = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>
     <circle cx="12" cy="12" r="9" />

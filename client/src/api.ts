@@ -54,6 +54,16 @@ export interface Publication {
   publishedAt: string
   updatedAt: string
 }
+export interface CacheStats {
+  entries: number
+  lookups: number
+  exactHits: number
+  similarHits: number
+  misses: number
+  /** Percent of build requests answered without calling a model. */
+  hitRate: number
+  threshold: number
+}
 export interface ChatSessionSummary {
   id: string
   title: string
@@ -87,6 +97,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ prompt, currentCode }),
     }),
+  cacheStats: () => req<{ stats: CacheStats }>('/api/cache/stats'),
   publication: (id: string) => req<{ publication: Publication | null }>(`/api/projects/${id}/publish`),
   publish: (id: string, html: string) =>
     req<{ publication: Publication }>(`/api/projects/${id}/publish`, { method: 'POST', body: JSON.stringify({ html }) }),

@@ -215,6 +215,24 @@ button { font-family: inherit; }
 .buildcard .bc-t { font-size: 12.8px; font-weight: 600; }
 .buildcard .bc-s { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
 
+/* A build reused from a *similar* prompt rather than an identical one — called
+   out differently, because the user needs to notice and be able to reject it. */
+.buildcard.reused { align-items: flex-start; border-color: rgba(56, 224, 216, 0.3); background: linear-gradient(180deg, rgba(56, 224, 216, 0.09), rgba(56, 224, 216, 0.02)); }
+.buildcard.reused .bc-icon { background: linear-gradient(135deg, #38e0d8, #3aa0ff); }
+.buildcard .bc-main { min-width: 0; flex: 1; }
+.buildcard .bc-t { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.bc-score { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cyan); border: 1px solid rgba(56, 224, 216, 0.35); border-radius: 5px; padding: 1px 6px; }
+.buildcard.reused .bc-s q { font-style: italic; color: var(--text); quotes: '“' '”'; }
+.bc-action { margin-top: 9px; padding: 5px 10px; border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface); color: var(--muted); font-family: var(--font-body); font-size: 11.5px; font-weight: 550; cursor: pointer; transition: 0.16s; }
+.bc-action:hover:not(:disabled) { color: var(--text); background: var(--surface-2); border-color: rgba(56, 224, 216, 0.4); }
+.bc-action:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Build-library figures pinned under the file tree. */
+.exp-hint { display: flex; align-items: baseline; gap: 6px; }
+.exp-hint svg { color: var(--cyan); flex: none; position: relative; top: 2px; }
+.exp-hint b { color: var(--cyan); font-weight: 700; }
+.exp-saved { margin-left: auto; flex: none; color: var(--muted-2); opacity: 0.75; white-space: nowrap; }
+
 .building { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
 .building .orb { width: 22px; height: 22px; border-radius: 50%; background: conic-gradient(from 0deg, var(--violet), var(--magenta), var(--cyan), var(--violet)); animation: spin 1s linear infinite; -webkit-mask: radial-gradient(circle at center, transparent 5px, #000 6px); mask: radial-gradient(circle at center, transparent 5px, #000 6px); }
 @keyframes spin { to { transform: rotate(360deg); } }

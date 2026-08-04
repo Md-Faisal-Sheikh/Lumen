@@ -20,6 +20,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 - **Point at it instead of describing it** — arm the picker, hover the live preview to outline elements, and click one. The chat then knows exactly which element you mean, so *"make it bigger and green"* lands on that button and nothing else.
 - **Inline edits with Ctrl+K** — select lines in the editor, press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, and say what to change. Because the exact line range travels with the request, only those lines are rewritten — the rest of the file stays byte-identical.
 - **Voice mode** — tap the mic to *speak* your idea instead of typing, and optionally have Lumen read its replies back aloud. Powered by the browser's built-in Web Speech API — free, no key, nothing to install.
+- **A build library that recognises paraphrases** — ask for *"snake game with neon colors"* when someone already built *"a neon snake game"* and you get it instantly, with no AI call. The cache matches on meaning, not on exact wording, and always tells you when it reused something.
 - **Publish to a public link** — one click gives the project a `/p/<slug>` page that *anyone* can open. No account, no sign-in, nothing to install — just send the link.
 - **Export as a real project** — one click downloads a `.zip` of actual files in actual folders: `index.html`, `styles.css`, `app.js`, `styles/theme.css`. Unzip it and double-click `index.html`; there's no build step and nothing to install. The archive is written in the browser by hand — no library, no server round-trip.
 - **Accounts, projects & history** — sign in, create projects, invite teammates, and every build is snapshotted as a version.
@@ -89,6 +90,21 @@ Open the app in **two browser windows** (or share the project link via the **Sha
 ### Voice mode
 
 Tap the **mic** in the composer and speak — your words are transcribed into the prompt for you to review, then send. Toggle the **speaker** button in the top bar to have Lumen read its replies aloud. Voice uses the browser's native Web Speech API (best support in Chrome, Edge, and Safari); if a browser doesn't support it, the mic simply doesn't appear and typing works as normal.
+
+### The build library
+
+Every first-time build is saved to a cache shared by all users, so nobody pays to generate the same app twice. That cache used to key on the exact normalized text — which meant a real database of ours held *three separate entries* for tic tac toe (`build a tic tac toe game app`, `make a tic tac toe game app`, `make a tic tac toe app`) and two for the same coffee shop site. Every one of those was a full generation that didn't need to happen.
+
+It now falls through to a similarity pass ([`server/src/similarity.ts`](server/src/similarity.ts)) — no model, no dependency, no API key:
+
+- prompts are stopworded and conservatively stemmed, then split into **distinctive** words and **weak** ones (`app`, `simple`, `neon`, `arrow keys` — words that describe how a thing looks or how you poke at it, not what it *is*)
+- scoring blends a weighted **cosine** with **coverage of the smaller prompt**, because cosine alone punishes elaboration exactly as hard as disagreement — `a neon snake game I can play with arrow keys` would otherwise score no better against `snake game with neon colors` than a chess game does
+- **IDF over the cache itself** means that with a hundred cached games, `game` earns a low weight from the evidence rather than from a hard-coded list
+- character trigrams contribute a little, to absorb typos and morphology
+
+A wrong match is much worse than a miss — it hands somebody an app they didn't ask for — so the threshold is picked from a labelled set of 34 prompt pairs rather than by feel. At the configured **0.62** that set separates cleanly: **16/16** paraphrases matched, **0/18** false positives, with the nearest wrong pair 0.21 below the hardest right one. Those three tic-tac-toe entries score 0.94–1.00 against each other; `pomodoro timer` vs `countdown timer` scores 0.41 and stays a miss, as do `todo list` vs `shopping list`, `weather dashboard` vs `crypto dashboard`, and `a red button` vs `a blue button`.
+
+Reuse is never silent. A loose match shows a **Reused a similar build** card naming the prompt it matched and the score, with a *Build a fresh one* button that re-runs the request with the cache bypassed. The file explorer footer carries the running numbers — entries, hit rate, how many were matched by similarity, and how many AI calls the library has saved — served from `GET /api/cache/stats`.
 
 ### Publishing to a public link
 

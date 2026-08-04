@@ -1,6 +1,50 @@
 import { useEffect, useRef, useState } from 'react'
 import { buildTree, INDEX_FILE, type TreeNode } from '../files'
-import { Chevron, FileIcon, FilePlus, FolderIcon, FolderOpenIcon, Pencil, Trash } from '../icons'
+import { api, type CacheStats } from '../api'
+import { Chevron, FileIcon, FilePlus, FolderIcon, FolderOpenIcon, Pencil, Recycle, Trash } from '../icons'
+
+// How much work the shared build library is actually saving. Refetched after
+// every build, so the number is the live one rather than a claim in a README.
+function BuildLibrary({ refreshKey }: { refreshKey: number }) {
+  const [stats, setStats] = useState<CacheStats | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    api
+      .cacheStats()
+      .then(({ stats }) => alive && setStats(stats))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [refreshKey])
+
+  if (!stats || stats.entries === 0) return null
+  const reused = stats.exactHits + stats.similarHits
+  return (
+    <div
+      className="exp-hint"
+      title={
+        `${stats.lookups} build request${stats.lookups === 1 ? '' : 's'} · ` +
+        `${stats.exactHits} exact · ${stats.similarHits} similar · ${stats.misses} generated fresh\n` +
+        `Similar builds are reused above a ${Math.round(stats.threshold * 100)}% prompt-match score.`
+      }
+    >
+      <Recycle width={12} height={12} />
+      <span>
+        Build library · {stats.entries} app{stats.entries === 1 ? '' : 's'}
+        {stats.lookups > 0 && (
+          <>
+            {' · '}
+            <b>{stats.hitRate}%</b> reused
+            {stats.similarHits > 0 && <> ({stats.similarHits} by similarity)</>}
+          </>
+        )}
+      </span>
+      {reused > 0 && <span className="exp-saved">{reused} AI call{reused === 1 ? '' : 's'} saved</span>}
+    </div>
+  )
+}
 
 // VS Code-style explorer: nested folders, entry-point pin, hover actions.
 // Folders are implied by "/" in file paths (e.g. "styles/theme.css").
@@ -12,6 +56,7 @@ export function FileExplorer({
   onCreate,
   onRename,
   onDelete,
+  cacheTick = 0,
 }: {
   projectName: string
   files: string[]
@@ -20,6 +65,8 @@ export function FileExplorer({
   onCreate: (path: string) => void
   onRename: (path: string) => void
   onDelete: (path: string) => void
+  /** Changes whenever a build finishes, to refresh the build-library figures. */
+  cacheTick?: number
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
@@ -137,6 +184,7 @@ export function FileExplorer({
           <div className="exp-empty">No files yet — describe your app in the chat and Lumen will create them here.</div>
         )}
       </div>
+      <BuildLibrary refreshKey={cacheTick} />
     </aside>
   )
 }

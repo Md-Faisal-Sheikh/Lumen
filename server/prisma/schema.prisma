@@ -96,14 +96,26 @@ model ChatSession {
 // whose prompt matches one already generated (normalized), the code is served
 // straight from the database instead of calling the AI again.
 model BuildCache {
-  id        String   @id @default(cuid())
-  promptKey String   @unique // normalized prompt (lowercased, whitespace-collapsed)
-  prompt    String // the original prompt as first typed
-  output    String // full marker-format model output (every file)
-  summary   String?
-  hits      Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
+  id          String   @id @default(cuid())
+  promptKey   String   @unique // normalized prompt (lowercased, whitespace-collapsed)
+  prompt      String // the original prompt as first typed
+  output      String // full marker-format model output (every file)
+  summary     String?
+  hits        Int      @default(0) // every reuse, exact or similar
+  similarHits Int      @default(0) // just the ones matched by similarity
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+}
+
+// Running totals for the build cache, so its value is a number rather than a
+// claim. One row; `lookups` is partitioned by the three outcomes.
+model CacheStat {
+  id          String   @id @default("global")
+  lookups     Int      @default(0)
+  exactHits   Int      @default(0)
+  similarHits Int      @default(0)
+  misses      Int      @default(0)
+  updatedAt   DateTime @default(now()) @updatedAt
 }
 
 // Binary Yjs document state, persisted by the Hocuspocus database extension.

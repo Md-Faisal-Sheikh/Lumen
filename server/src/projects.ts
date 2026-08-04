@@ -15,6 +15,7 @@ import {
   type LineEdit,
 } from './edits'
 import { makeSlug, publicUrl } from './publish'
+import { lookupBuild, storeBuild } from './cache'
 
 export const projectsRouter = Router()
 
@@ -194,14 +195,6 @@ projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
   res.json({ version })
 })
 
-// Normalize a prompt into the shared cache key, so the same request in
-// different casing/spacing hits the same entry.
-const promptKey = (prompt: string) => prompt.toLowerCase().replace(/\s+/g, ' ').trim()
-
-// Only cache output that actually looks like a generated project — never a
-// refusal or error prose, which would poison the cache for every user.
-const looksLikeProject = (out: string) => /={3,}\s*FILE:/.test(out) || /<!doctype html/i.test(out)
-
 // ── The build endpoint: streams generated code back as Server-Sent Events. ──
 projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const m = await membership(req.params.id, uid(req))
@@ -209,6 +202,8 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
 
   const prompt = (req.body?.prompt ?? '').toString()
   const currentCode = req.body?.currentCode ? String(req.body.currentCode) : undefined
+  // Set when the user rejected a reused build and wants this one generated.
+  const noCache = req.body?.noCache === true
   if (!prompt.trim()) return res.status(400).json({ error: 'Describe what to build.' })
 
   res.setHeader('Content-Type', 'text/event-stream')
@@ -220,16 +215,23 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`)
 
   try {
-    // Fresh build (no existing code to modify): if any user already generated
-    // this same prompt, serve the code straight from the database — no AI call.
-    if (!currentCode) {
-      const cached = await prisma.buildCache.findUnique({ where: { promptKey: promptKey(prompt) } })
-      if (cached) {
-        for (let i = 0; i < cached.output.length; i += 4096) send({ delta: cached.output.slice(i, i + 4096) })
-        await prisma.version.create({ data: { projectId: req.params.id, prompt, html: cached.output } })
+    // Fresh build (no existing code to modify): if anyone has already generated
+    // this idea — the same words, or close enough — serve it straight from the
+    // database with no AI call. A loose match reports what it reused so the
+    // client can show it and offer to generate a fresh one instead.
+    if (!currentCode && !noCache) {
+      const hit = await lookupBuild(prompt)
+      if (hit) {
+        for (let i = 0; i < hit.output.length; i += 4096) send({ delta: hit.output.slice(i, i + 4096) })
+        await prisma.version.create({ data: { projectId: req.params.id, prompt, html: hit.output } })
         await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
-        await prisma.buildCache.update({ where: { id: cached.id }, data: { hits: { increment: 1 } } })
-        send({ done: true, summary: cached.summary ?? extractSummary(cached.output), cached: true })
+        send({
+          done: true,
+          summary: hit.summary ?? extractSummary(hit.output),
+          cached: true,
+          reusedFrom: hit.reusedFrom,
+          similarity: hit.similarity,
+        })
         return
       }
     }
@@ -241,15 +243,9 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
     await prisma.version.create({ data: { projectId: req.params.id, prompt, html: full } })
     await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
 
-    // Save fresh builds into the shared cache: the next user who asks for the
-    // same project gets this code from the database instantly.
-    if (!currentCode && looksLikeProject(full)) {
-      await prisma.buildCache.upsert({
-        where: { promptKey: promptKey(prompt) },
-        create: { promptKey: promptKey(prompt), prompt, output: full, summary },
-        update: { output: full, summary },
-      })
-    }
+    // Save fresh builds into the shared cache: the next person who asks for
+    // this — in these words or near enough — gets it from the database.
+    if (!currentCode) await storeBuild(prompt, full, summary)
 
     send({ done: true, summary })
   } catch (err: any) {
