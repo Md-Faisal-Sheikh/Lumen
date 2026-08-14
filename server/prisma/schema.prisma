@@ -30,6 +30,7 @@ model Project {
   updatedAt DateTime        @updatedAt
   members   ProjectMember[]
   versions  Version[]
+  memories  ProjectMemory[]
   doc       Doc?
 }
 
@@ -52,6 +53,25 @@ model Version {
   html      String
   createdAt DateTime @default(now())
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// Persistent AI-generated and user-defined project context.
+model ProjectMemory {
+  id         String   @id @default(cuid())
+  projectId  String
+  type       String
+  content    String
+  importance Int      @default(3)
+  confidence Float    @default(1.0)
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([projectId, type])
+  @@index([projectId, status])
 }
 
 // Binary Yjs document state, persisted by the Hocuspocus database extension.
