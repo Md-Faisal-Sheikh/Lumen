@@ -17,15 +17,38 @@ Keep it reasonably compact, but complete and working.`
 
 export type OnDelta = (text: string) => void
 
-function buildUserContent(prompt: string, currentCode?: string): string {
-  if (currentCode && currentCode.trim()) {
-    return `Current document:\n\n${currentCode}\n\n---\nRequested change: ${prompt}`
-  }
-  return prompt
+function buildUserContent(
+  prompt: string,
+  currentCode?: string,
+  context?: string,
+): string {
+  const sections: string[] = []
+
+  if (context?.trim()) {
+  sections.push(
+    `Relevant project memory (use as reference when making the requested change):\n\n${context.trim()}`,
+  )
 }
 
-export async function streamBuild(prompt: string, currentCode: string | undefined, onDelta: OnDelta): Promise<string> {
-  const user = buildUserContent(prompt, currentCode)
+  if (currentCode?.trim()) {
+    sections.push(
+      `Current document:\n\n${currentCode.trim()}`,
+    )
+  }
+
+  sections.push(`Requested change: ${prompt}`)
+
+  return sections.join('\n\n---\n\n')
+}
+
+export async function streamBuild(
+  prompt: string,
+  currentCode: string | undefined,
+  onDelta: OnDelta,
+  context?: string,
+): Promise<string> {
+  const user = buildUserContent(prompt, currentCode, context)
+
   switch (env.AI_PROVIDER) {
     case 'gemini':
       return streamGemini(user, onDelta)

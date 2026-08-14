@@ -5,7 +5,9 @@ import { streamBuild, extractSummary } from './ai'
 import {
   createProjectMemory,
   deleteProjectMemory,
+  formatMemoriesForAI,
   listProjectMemories,
+  retrieveRelevantMemories,
   updateProjectMemory,
 } from './memory'
 
@@ -215,11 +217,18 @@ projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
 // ── The build endpoint: streams generated code back as Server-Sent Events. ──
 projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const m = await membership(req.params.id, uid(req))
-  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+  if (!m) {
+    return res.status(403).json({ error: "You don't have access to this project." })
+  }
 
   const prompt = (req.body?.prompt ?? '').toString()
-  const currentCode = req.body?.currentCode ? String(req.body.currentCode) : undefined
-  if (!prompt.trim()) return res.status(400).json({ error: 'Describe what to build.' })
+  const currentCode = req.body?.currentCode
+    ? String(req.body.currentCode)
+    : undefined
+
+  if (!prompt.trim()) {
+    return res.status(400).json({ error: 'Describe what to build.' })
+  }
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -227,15 +236,44 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
 
-  const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  const send = (obj: unknown) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  }
 
   try {
-    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }))
+    // Retrieve project memories relevant to the user's request.
+    const relevantMemories = await retrieveRelevantMemories(
+      req.params.id,
+      prompt,
+      8,
+    )
+
+    // Convert retrieved memories into context for the AI build engine.
+    const memoryContext = formatMemoriesForAI(relevantMemories)
+
+    // Generate the build using both the user's request and relevant project memory.
+    const full = await streamBuild(
+      prompt,
+      currentCode,
+      (delta) => send({ delta }),
+      memoryContext,
+    )
+
     const summary = extractSummary(full)
 
     // Persist a version snapshot and bump the project's updatedAt.
-    await prisma.version.create({ data: { projectId: req.params.id, prompt, html: full } })
-    await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
+    await prisma.version.create({
+      data: {
+        projectId: req.params.id,
+        prompt,
+        html: full,
+      },
+    })
+
+    await prisma.project.update({
+      where: { id: req.params.id },
+      data: { updatedAt: new Date() },
+    })
 
     send({ done: true, summary })
   } catch (err: any) {
