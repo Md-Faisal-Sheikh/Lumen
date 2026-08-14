@@ -2,6 +2,12 @@ import { Router, type Request, type Response } from 'express'
 import { prisma } from './db'
 import { authMiddleware } from './auth'
 import { streamBuild, extractSummary } from './ai'
+import {
+  createProjectMemory,
+  deleteProjectMemory,
+  listProjectMemories,
+  updateProjectMemory,
+} from './memory'
 
 export const projectsRouter = Router()
 
@@ -93,6 +99,93 @@ projectsRouter.post('/:id/invite', async (req, res) => {
     update: {},
   })
   res.json({ ok: true, member: { id: invitee.id, name: invitee.name, color: invitee.color } })
+})
+
+// ── Project Memory ─────────────────────────────────────────────────────────
+
+// List the active memories associated with this project.
+projectsRouter.get('/:id/memory', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const memories = await listProjectMemories(req.params.id)
+
+  res.json({
+    memories,
+  })
+})
+
+// Add a project memory manually.
+projectsRouter.post('/:id/memory', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const content = (req.body?.content ?? '').toString().trim()
+  if (!content) {
+    return res.status(400).json({ error: 'Memory content cannot be empty.' })
+  }
+
+  try {
+    const memory = await createProjectMemory(req.params.id, {
+      type: req.body?.type,
+      content,
+      importance: req.body?.importance,
+      confidence: req.body?.confidence,
+    })
+
+    res.status(201).json({ memory })
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'Could not create memory.',
+    })
+  }
+})
+
+// Update a project memory.
+projectsRouter.patch('/:id/memory/:memoryId', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  try {
+    const memory = await updateProjectMemory(
+      req.params.id,
+      req.params.memoryId,
+      {
+        type: req.body?.type,
+        content: req.body?.content,
+        importance: req.body?.importance,
+        confidence: req.body?.confidence,
+        status: req.body?.status,
+      },
+    )
+
+    if (!memory) {
+      return res.status(404).json({ error: 'Memory not found.' })
+    }
+
+    res.json({ memory })
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'Could not update memory.',
+    })
+  }
+})
+
+// Delete a project memory.
+projectsRouter.delete('/:id/memory/:memoryId', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const deleted = await deleteProjectMemory(
+    req.params.id,
+    req.params.memoryId,
+  )
+
+  if (!deleted) {
+    return res.status(404).json({ error: 'Memory not found.' })
+  }
+
+  res.json({ ok: true })
 })
 
 // Build history.
