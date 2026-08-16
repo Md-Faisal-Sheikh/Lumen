@@ -2,6 +2,14 @@ import { Router, type Request, type Response } from 'express'
 import { prisma } from './db'
 import { authMiddleware } from './auth'
 import { streamBuild, extractSummary } from './ai'
+import {
+  createProjectMemory,
+  deleteProjectMemory,
+  formatMemoriesForAI,
+  listProjectMemories,
+  retrieveRelevantMemories,
+  updateProjectMemory,
+} from './memory'
 
 export const projectsRouter = Router()
 
@@ -95,6 +103,93 @@ projectsRouter.post('/:id/invite', async (req, res) => {
   res.json({ ok: true, member: { id: invitee.id, name: invitee.name, color: invitee.color } })
 })
 
+// ── Project Memory ─────────────────────────────────────────────────────────
+
+// List the active memories associated with this project.
+projectsRouter.get('/:id/memory', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const memories = await listProjectMemories(req.params.id)
+
+  res.json({
+    memories,
+  })
+})
+
+// Add a project memory manually.
+projectsRouter.post('/:id/memory', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const content = (req.body?.content ?? '').toString().trim()
+  if (!content) {
+    return res.status(400).json({ error: 'Memory content cannot be empty.' })
+  }
+
+  try {
+    const memory = await createProjectMemory(req.params.id, {
+      type: req.body?.type,
+      content,
+      importance: req.body?.importance,
+      confidence: req.body?.confidence,
+    })
+
+    res.status(201).json({ memory })
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'Could not create memory.',
+    })
+  }
+})
+
+// Update a project memory.
+projectsRouter.patch('/:id/memory/:memoryId', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  try {
+    const memory = await updateProjectMemory(
+      req.params.id,
+      req.params.memoryId,
+      {
+        type: req.body?.type,
+        content: req.body?.content,
+        importance: req.body?.importance,
+        confidence: req.body?.confidence,
+        status: req.body?.status,
+      },
+    )
+
+    if (!memory) {
+      return res.status(404).json({ error: 'Memory not found.' })
+    }
+
+    res.json({ memory })
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'Could not update memory.',
+    })
+  }
+})
+
+// Delete a project memory.
+projectsRouter.delete('/:id/memory/:memoryId', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const deleted = await deleteProjectMemory(
+    req.params.id,
+    req.params.memoryId,
+  )
+
+  if (!deleted) {
+    return res.status(404).json({ error: 'Memory not found.' })
+  }
+
+  res.json({ ok: true })
+})
+
 // Build history.
 projectsRouter.get('/:id/versions', async (req, res) => {
   const m = await membership(req.params.id, uid(req))
@@ -122,11 +217,18 @@ projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
 // ── The build endpoint: streams generated code back as Server-Sent Events. ──
 projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const m = await membership(req.params.id, uid(req))
-  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+  if (!m) {
+    return res.status(403).json({ error: "You don't have access to this project." })
+  }
 
   const prompt = (req.body?.prompt ?? '').toString()
-  const currentCode = req.body?.currentCode ? String(req.body.currentCode) : undefined
-  if (!prompt.trim()) return res.status(400).json({ error: 'Describe what to build.' })
+  const currentCode = req.body?.currentCode
+    ? String(req.body.currentCode)
+    : undefined
+
+  if (!prompt.trim()) {
+    return res.status(400).json({ error: 'Describe what to build.' })
+  }
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -134,15 +236,44 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
 
-  const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  const send = (obj: unknown) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  }
 
   try {
-    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }))
+    // Retrieve project memories relevant to the user's request.
+    const relevantMemories = await retrieveRelevantMemories(
+      req.params.id,
+      prompt,
+      8,
+    )
+
+    // Convert retrieved memories into context for the AI build engine.
+    const memoryContext = formatMemoriesForAI(relevantMemories)
+
+    // Generate the build using both the user's request and relevant project memory.
+    const full = await streamBuild(
+      prompt,
+      currentCode,
+      (delta) => send({ delta }),
+      memoryContext,
+    )
+
     const summary = extractSummary(full)
 
     // Persist a version snapshot and bump the project's updatedAt.
-    await prisma.version.create({ data: { projectId: req.params.id, prompt, html: full } })
-    await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
+    await prisma.version.create({
+      data: {
+        projectId: req.params.id,
+        prompt,
+        html: full,
+      },
+    })
+
+    await prisma.project.update({
+      where: { id: req.params.id },
+      data: { updatedAt: new Date() },
+    })
 
     send({ done: true, summary })
   } catch (err: any) {
