@@ -171,3 +171,30 @@ export const ArrowLeft = (p: SVGProps<SVGSVGElement>) => (
     <path d="M19 12H5M11 6l-6 6 6 6" />
   </svg>
 )
+export const ImageIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <circle cx="8.5" cy="9.5" r="1.6" />
+    <path d="M3.5 17.5 8.8 12.6a2 2 0 0 1 2.7 0l3.2 3M13.8 15.2l2-1.8a2 2 0 0 1 2.7 0l2 1.9" />
+  </svg>
+)
+export const Eraser = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M9 20H5.6a2 2 0 0 1-1.4-3.4l9-9a2 2 0 0 1 2.8 0l3.4 3.4a2 2 0 0 1 0 2.8L13 20H9Z" />
+    <path d="M8.5 12.5 15 19M20 20h-7" />
+  </svg>
+)
+export const Undo = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4 9h10a5 5 0 0 1 0 10h-5" />
+    <path d="M8 5 4 9l4 4" />
+  </svg>
+)
+/** The composer button that opens the sketch pad: a pencil over a board. */
+export const SketchIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M20 12.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6.5" />
+    <path d="M7.5 8h6M7.5 12h3" />
+    <path d="M14.6 20.4 14 22l1.6-.6 5.1-5.1a1.4 1.4 0 0 0-2-2l-5.1 5.1Z" />
+  </svg>
+)

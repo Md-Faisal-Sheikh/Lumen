@@ -19,7 +19,8 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 - **Iterate by conversation** — every follow-up ("make the header sticky", "use a dark theme") modifies the running app.
 - **Point at it instead of describing it** — arm the picker, hover the live preview to outline elements, and click one. The chat then knows exactly which element you mean, so *"make it bigger and green"* lands on that button and nothing else.
 - **Inline edits with Ctrl+K** — select lines in the editor, press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, and say what to change. Because the exact line range travels with the request, only those lines are rewritten — the rest of the file stays byte-identical.
-- **Voice mode** — tap the mic to *speak* your idea instead of typing, and optionally have Lumen read its replies back aloud. Powered by the browser's built-in Web Speech API — free, no key, nothing to install.
+- **Voice mode** — tap the mic and *talk*. Dictation keeps listening through the pauses you take to think, you can still type mid-sentence without the two fighting over the box, and Lumen can read its replies back aloud. Powered by the browser's built-in Web Speech API — free, no key, nothing to install.
+- **Draw it instead of describing it** — open the sketch pad and scribble a wireframe: boxes, lines, a few labels. Lumen reads the drawing as *layout* and builds the interface it describes. Drop a screenshot in instead and it rebuilds that screen as a real, responsive page — and anything you scrawl on top of the screenshot is read as an instruction, not copied.
 - **A build library that recognises paraphrases** — ask for *"snake game with neon colors"* when someone already built *"a neon snake game"* and you get it instantly, with no AI call. The cache matches on meaning, not on exact wording, and always tells you when it reused something.
 - **Publish to a public link** — one click gives the project a `/p/<slug>` page that *anyone* can open. No account, no sign-in, nothing to install — just send the link.
 - **Export as a real project** — one click downloads a `.zip` of actual files in actual folders: `index.html`, `styles.css`, `app.js`, `styles/theme.css`. Unzip it and double-click `index.html`; there's no build step and nothing to install. The archive is written in the browser by hand — no library, no server round-trip.
@@ -33,6 +34,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 | Editor | CodeMirror 6 + `y-codemirror.next` | collaborative editing + in-editor cursors |
 | Real-time | **Yjs** CRDT over self-hosted **Hocuspocus** WebSocket server | you host it; no SaaS |
 | AI engine | **OpenRouter** · **Google Gemini** · **Ollama** (pluggable) | all have free tiers; Ollama is fully local |
+| Sketch input | `<canvas>` + the same free providers' vision models | drawing, scaling and encoding all happen in the browser |
 | API | Node + Express | open-source |
 | Auth | JWT + bcrypt (local) | no external auth provider |
 | Database | Prisma + **SQLite** (swap to Postgres) | file-based, zero-config |
@@ -59,7 +61,7 @@ The AI key lives **only on the server** — the browser never sees it. The build
 - One free AI provider (pick whichever you like):
   - **OpenRouter** *(default)* — get a free key at <https://openrouter.ai/keys>
   - **Google Gemini** — get a free key at <https://aistudio.google.com/apikey>
-  - **Ollama** *(fully local, no key)* — install from <https://ollama.com>, then `ollama pull qwen2.5-coder:7b`
+  - **Ollama** *(fully local, no key)* — install from <https://ollama.com>, then `ollama pull qwen2.5-coder:7b` (and `ollama pull qwen2.5vl:7b` if you want to build from sketches)
 
 ## Quick start
 
@@ -89,7 +91,44 @@ Open the app in **two browser windows** (or share the project link via the **Sha
 
 ### Voice mode
 
-Tap the **mic** in the composer and speak — your words are transcribed into the prompt for you to review, then send. Toggle the **speaker** button in the top bar to have Lumen read its replies aloud. Voice uses the browser's native Web Speech API (best support in Chrome, Edge, and Safari); if a browser doesn't support it, the mic simply doesn't appear and typing works as normal.
+Tap the **mic** in the composer and talk. Words appear in a strip above the box while they're still being heard, and drop into the prompt once the recognizer commits them — so you can review and edit before sending. Toggle the **speaker** in the top bar to have Lumen read its replies aloud. It's the browser's native Web Speech API throughout (Chrome, Edge, and Safari); where it isn't supported the mic simply doesn't appear and typing works as normal.
+
+Three things about that API make a naïve wiring of it feel broken, and most of `client/src/speech.ts` is about them:
+
+- **Recognition is not continuous**, whatever `continuous = true` suggests. Chrome ends the session after a few seconds of quiet, so pausing to think ended dictation with nothing on screen to say so. Staying on means restarting it — which is why the user's *intent* is tracked separately from whether the engine happens to be running. The restart is invisible: the indicator doesn't blink and nothing is lost across it.
+- **Synthesis and recognition share a room.** With voice output on and the mic open, Lumen's reply was read aloud straight into the microphone and transcribed back into the composer. Speaking now stands dictation down and hands it back afterwards, and the strip says so rather than just going dark. The pause isn't charged against you as silence.
+- **A long utterance is cut off partway through** in Chrome. Replies are split at sentence boundaries into pieces that each stay under the limit, so a four-sentence summary is read out completely.
+
+Because it restarts constantly, a real failure has to be told apart from an ordinary pause — and the only difference is *timing*. Nothing is heard for 25 seconds and the microphone is released rather than left live with the browser's recording indicator lit; the engine dies and revives a dozen times in ten seconds and it stops and says so. Every failure that has a fix now names it: a blocked microphone, no input device, and being offline (the browser transcribes in the cloud) used to be one indistinguishable *"Voice input stopped unexpectedly."*
+
+Dictation also no longer owns the text box. It reports finished phrases and the composer appends them, so you can type mid-sentence without your keystrokes being overwritten — the previous version snapshotted the field when the mic opened, rewrote it wholesale on every result, and flattened any line breaks already in it. Pressing Enter mid-phrase sends those words too, rather than dropping them and pasting them into the next, empty message. Recognition follows your browser's language instead of assuming `en-US`.
+
+> All of that logic is a plain state machine with no React in it (`createDictation`), taking its clock and scheduler as arguments. That's what makes it testable: the restart, the silence release, the give-up threshold, the hand-off while Lumen speaks, and every error path are exercised against a fake recognizer in milliseconds, with no browser, no microphone, and no 25-second waits.
+
+### Draw it instead of describing it
+
+Some things are far quicker to draw than to write down. *"A top bar with four links, a sidebar of six items, and a 2×2 grid of cards, each with an image, a heading and two lines of text"* is a sentence nobody wants to type — but it's ten seconds with a pen.
+
+Press the **sketch** button in the composer and a white board opens. Draw the layout, then send it. There is nothing to type at all: with an image attached the words become optional.
+
+The pad is a plain `<canvas>` with a pen, an eraser, undo, and a few ink colours. Two things about it are worth knowing:
+
+- **Strokes are stored in board space** — normalized to 0..1, with widths in units of a 1000-wide board. The pad is resizable and the export is a fixed 1152×720 regardless of your window, so nothing may depend on screen pixels. Resize mid-drawing and the sketch is unchanged.
+- **Ink is its own layer.** Erasing is a `destination-out` composite, which would punch a hole through an imported screenshot if it shared a canvas with it. The eraser removes *your marks*, never the thing you drew them on.
+
+Drop a **screenshot** in — onto the pad, or straight onto the composer, or just paste it with <kbd>Ctrl</kbd>+<kbd>V</kbd> — and you get the other half of the feature: Lumen rebuilds that screen as a real page, with real elements that reflow, rather than tracing it with absolutely-positioned boxes. Scribble on top of it and the marks become instructions: *circle a button, draw an arrow to where it should go*.
+
+The two are genuinely different requests and the server treats them as such. A wireframe is a **blueprint** — its lines carry layout and nothing else, so reproducing how it *looks* would be precisely wrong; the build instruction says boxes are containers, horizontal lines are text, a crossed box is an image, handwriting is a label to typeset and never to draw. A screenshot is a **target** — its look is the entire point. Sending one instruction for both produced sketchy-looking output from wireframes and rigid traced markup from screenshots, so `server/src/ai.ts` carries one for each.
+
+**What the browser does before anything is sent.** [`client/src/vision.ts`](client/src/vision.ts) scales the image to 1152px on its longest edge — past that you pay for image tiles that add nothing — and flattens it onto **white**. The white is not cosmetic: most exported wireframes have a transparent background, which a provider flattens to black, and a model asked to read black ink on black sees an empty page. It then encodes the result as *both* PNG and JPEG and keeps whichever came out smaller, which picks losslessly for flat wireframe colour and compactly for a photograph without having to guess from the file extension. A typical screenshot leaves as ~200 KB. It's all `<canvas>` and `createImageBitmap` — the same reason the ZIP writer is hand-rolled: nothing to install, no upload, nothing to host.
+
+**Only a thumbnail is kept.** The chat shows the picture each build came from, but what lives in the Yjs document — permanently, synced to everyone in the room, saved into every autosaved chat — is a 168px thumbnail of a few KB, never the full image.
+
+**Image builds never touch the build library.** The cache in the section below is keyed on prompt text, and here the text is a footnote to a picture: two people can type *"build this"* over completely different wireframes, so a text match would hand one of them the other's app. The lookup is skipped and the result is not stored, which also keeps that key clean for the text builds that do use it. The reply says so explicitly rather than leaving you to infer it.
+
+> **On free-tier vision models.** A provider's best *coding* model usually can't see, so an attached image is routed to a separate vision model and text builds keep running on whatever you already configured. For OpenRouter that setting is a comma-separated **fallback list**, and it earns its keep: while this was being built the shipped default had been retired outright (404) and its replacement answered 429 from a saturated shared pool the same afternoon. A model that is gone or busy hands over to the next one; only the opening response is retried, because once code is streaming the room has already watched it arrive. Pin the variable to a single name if you'd rather be told than quietly substituted. If nothing is configured that can see, the sketch button doesn't appear at all — the client asks `/api/health` rather than offering a button that can only fail.
+
+Smaller vision models also tend to answer in **markdown** instead of Lumen's `===== FILE: path =====` protocol — but they still split the project correctly and label each block with its language, which is the same information under a different name. [`client/src/files.ts`](client/src/files.ts) reads it: the response's shape is decided once, from its first real line, and a markdown answer has its fences treated as file boundaries (`html` → `index.html`, `css` → `styles.css`, `js` → `app.js`), its between-block prose dropped, and its summary comment stripped. Deciding the shape once, up front, is what stops a ``` inside a *generated* app — a markdown editor's sample text — from being mistaken for a boundary.
 
 ### The build library
 
@@ -161,6 +200,11 @@ The archive is assembled in the browser by `client/src/zip.ts`, a from-scratch Z
 | `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | — / `nvidia/nemotron-3-ultra-550b-a55b:free` | |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | — / `gemini-2.0-flash` | |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `qwen2.5-coder:7b` | |
+| `OPENROUTER_VISION_MODEL` | a 3-model free fallback list | used **only** when a sketch or screenshot is attached; comma-separated, tried in order |
+| `GEMINI_VISION_MODEL` | — | blank = reuse `GEMINI_MODEL`, which is already multimodal |
+| `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | needs `ollama pull qwen2.5vl:7b` |
+
+Blank out the vision variable for your provider to turn image builds off; the sketch button then doesn't appear.
 
 The client can optionally override `VITE_API_URL` and `VITE_WS_URL` (in `client/.env`); the localhost defaults work out of the box.
 
@@ -200,18 +244,22 @@ lumen/
 │     ├─ index.ts          HTTP server + WebSocket upgrade
 │     ├─ auth.ts           JWT register / login / me
 │     ├─ projects.ts       Project CRUD + SSE build endpoint
-│     ├─ ai.ts             Pluggable streaming providers (free)
+│     ├─ ai.ts             Pluggable streaming providers (free) + sketch/screenshot prompts
+│     ├─ vision.ts         Image validation + which model can see
 │     └─ collab.ts         Hocuspocus auth + DB persistence
 └─ client/                 React + Vite + CodeMirror
    └─ src/
       ├─ Editor.tsx        The collaborative room + build flow
-      └─ components/        TopBar · Conversation · Composer · PreviewPane · CodeEditor · Cursors
+      ├─ vision.ts         Scale · flatten · encode an attached image
+      ├─ speech.ts         Dictation state machine + chunked speech output
+      └─ components/        TopBar · Conversation · Composer · SketchPad · PreviewPane · CodeEditor · Cursors
 ```
 
 ## Security notes
 
 - Generated apps run in a **sandboxed iframe** (`allow-scripts` only — no same-origin access to Lumen).
 - AI provider keys are server-side only.
+- Attached images are validated on the server before they reach a provider: PNG/JPEG/WebP only, checked against the file's **magic bytes** rather than its declared type, and capped at 4 MB. SVG is refused outright — it is a document that can carry script, not a picture.
 - Passwords are bcrypt-hashed; sessions are stateless JWTs.
 - WebSocket connections are authenticated against the JWT **and** project membership before any document is shared.
 - For public deployments, set a strong `JWT_SECRET`, serve over HTTPS/WSS, and consider moving to Postgres.

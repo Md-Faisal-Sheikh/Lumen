@@ -243,17 +243,35 @@ button { font-family: inherit; }
 .composer { padding: 14px 16px 18px; border-top: 1px solid var(--border); background: linear-gradient(180deg, rgba(12, 10, 24, 0), rgba(12, 10, 24, 0.4)); }
 .composer-box { position: relative; border: 1px solid var(--border-2); border-radius: 14px; background: var(--surface); transition: 0.2s; }
 .composer-box:focus-within { border-color: rgba(176, 156, 255, 0.4); box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.1); }
-.composer textarea { width: 100%; resize: none; border: 0; background: transparent; color: var(--text); font-family: var(--font-body); font-size: 14px; line-height: 1.55; padding: 14px 96px 14px 15px; max-height: 180px; outline: none; }
+/* The action buttons sit over the textarea, so it reserves room for however
+   many are actually showing — the mic and the sketch button each depend on
+   support the browser or the server may not have. */
+.composer textarea { width: 100%; resize: none; border: 0; background: transparent; color: var(--text); font-family: var(--font-body); font-size: 14px; line-height: 1.55; padding: 14px calc(var(--actions, 2) * 44px + 12px) 14px 15px; max-height: 180px; outline: none; }
 .composer textarea::placeholder { color: var(--muted-2); }
-.send-btn { position: absolute; right: 9px; bottom: 9px; width: 36px; height: 36px; border-radius: 10px; border: 0; cursor: pointer; display: grid; place-items: center; color: #0a0712; background: var(--grad); box-shadow: 0 6px 18px -6px rgba(232, 76, 196, 0.6); transition: 0.16s; }
+.composer-actions { position: absolute; right: 9px; bottom: 9px; display: flex; align-items: center; gap: 8px; }
+.send-btn { width: 36px; height: 36px; border-radius: 10px; border: 0; cursor: pointer; display: grid; place-items: center; color: #0a0712; background: var(--grad); box-shadow: 0 6px 18px -6px rgba(232, 76, 196, 0.6); transition: 0.16s; }
 .send-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(0.4); }
 
-/* voice input */
-.mic-btn { position: absolute; right: 53px; bottom: 9px; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border-2); cursor: pointer; display: grid; place-items: center; color: var(--muted); background: var(--surface); transition: 0.16s; }
-.mic-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-2); border-color: var(--border-2); }
-.mic-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Secondary composer actions: voice in, and the sketch pad. */
+.act-btn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--border-2); cursor: pointer; display: grid; place-items: center; color: var(--muted); background: var(--surface); transition: 0.16s; }
+.act-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-2); border-color: var(--border-2); }
+.act-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.act-btn.on { color: #fff; background: linear-gradient(135deg, #8b5cf6, #38e0d8); border-color: transparent; }
 .mic-btn.on { color: #fff; background: linear-gradient(135deg, #e84cc4, #8b5cf6); border-color: transparent; box-shadow: 0 0 0 0 rgba(232, 76, 196, 0.5); animation: micpulse 1.5s ease-out infinite; }
+/* Still armed, but stood down so it doesn't transcribe Lumen's own voice. */
+.mic-btn.on.held { animation: none; background: linear-gradient(135deg, rgba(232, 76, 196, 0.34), rgba(139, 92, 246, 0.34)); }
+
+/* Live dictation. Words appear here while they're still being heard and move
+   into the box only once the recognizer commits them — which is what lets you
+   keep typing mid-sentence without the two fighting over the same field.
+   Staged above the box, like the other chips for pending context. */
+.hearing { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 8px; padding: 7px 11px; border: 1px solid rgba(232, 76, 196, 0.3); border-radius: 10px; background: rgba(232, 76, 196, 0.08); font-size: 12.5px; line-height: 1.5; }
+.hear-dot { flex: none; margin-top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--magenta); box-shadow: 0 0 0 0 rgba(232, 76, 196, 0.5); animation: micpulse 1.5s ease-out infinite; }
+.hear-text { color: var(--text); display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.hear-idle { color: var(--muted); }
+.hearing.held { border-color: var(--border); background: var(--surface); }
+.hearing.held .hear-dot { background: var(--muted-2); animation: none; box-shadow: none; }
 @keyframes micpulse { 0% { box-shadow: 0 0 0 0 rgba(232, 76, 196, 0.5); } 70% { box-shadow: 0 0 0 10px rgba(232, 76, 196, 0); } 100% { box-shadow: 0 0 0 0 rgba(232, 76, 196, 0); } }
 .composer-box.listening { border-color: rgba(232, 76, 196, 0.5); box-shadow: 0 0 0 4px rgba(232, 76, 196, 0.1); }
 
@@ -266,6 +284,29 @@ button { font-family: inherit; }
 .target-chip button:hover { color: var(--text); background: var(--surface-2); }
 .composer-box.targeted { border-color: rgba(56, 224, 216, 0.4); }
 .composer-box.targeted:focus-within { box-shadow: 0 0 0 4px rgba(56, 224, 216, 0.1); }
+
+/* Sketch or screenshot staged for the next message. */
+.composer { position: relative; }
+.composer.dropping::after {
+  content: 'Drop the image to build from it';
+  position: absolute; inset: 8px; z-index: 3; display: grid; place-items: center;
+  border: 1.5px dashed rgba(176, 156, 255, 0.55); border-radius: 14px;
+  background: rgba(20, 17, 36, 0.86); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  font-size: 12.5px; font-weight: 550; color: var(--text); pointer-events: none;
+}
+.shot-chip { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding: 7px 8px 7px 7px; border: 1px solid rgba(176, 156, 255, 0.3); border-radius: 12px; background: rgba(139, 92, 246, 0.09); }
+.shot-chip.loading { padding: 10px 12px; font-size: 12px; color: var(--muted); }
+.shot-chip img { width: 46px; height: 34px; flex: none; object-fit: cover; border-radius: 7px; background: #fff; border: 1px solid var(--border); }
+.shot-chip .sc-main { min-width: 0; flex: 1; }
+.shot-chip .sc-t { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shot-chip .sc-s { font-size: 11px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shot-chip button { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 7px; cursor: pointer; color: var(--muted); background: transparent; transition: 0.15s; }
+.shot-chip button:hover:not(:disabled) { color: var(--text); background: var(--surface-2); }
+.shot-chip button:disabled { opacity: 0.4; cursor: not-allowed; }
+.composer-box.attached { border-color: rgba(176, 156, 255, 0.4); }
+
+/* The picture a message was built from, in the transcript. */
+.msg-shot { display: block; max-width: min(240px, 100%); margin: 2px 0 7px; border-radius: 9px; border: 1px solid var(--border-2); background: #fff; }
 
 /* What a message was aimed at — a picked element, or a span of lines. */
 .msg-context { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; margin-bottom: 5px; padding: 2px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
@@ -305,6 +346,45 @@ button { font-family: inherit; }
 .sh-note { margin-top: 9px; font-size: 11.5px; line-height: 1.5; color: var(--muted-2); }
 .sh-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 11px; padding: 0; border: 0; background: none; cursor: pointer; font-family: var(--font-body); font-size: 12px; color: var(--muted); transition: 0.15s; }
 .sh-link:hover { color: var(--text); }
+
+/* ───────────── Sketch pad ─────────────
+   Draw the app instead of describing it. The board is white paper: what the
+   model is shown is exactly what is on screen here, so nothing about the dark
+   chrome may bleed into it. */
+/* A definite height, not just a cap: the board below is `flex: 1`, and in a
+   content-sized column it would collapse to its min-height instead of filling. */
+.sheet.pad { width: min(940px, 100%); height: min(90vh, 780px); max-height: min(90vh, 780px); }
+.pad-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.pad-tools .spacer { flex: 1; min-width: 0; }
+.pt-group { display: flex; align-items: center; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.pt-ink { width: 24px; height: 24px; border-radius: 7px; border: 0; cursor: pointer; background: transparent; display: grid; place-items: center; transition: 0.15s; }
+.pt-ink::after { content: ''; width: 15px; height: 15px; border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22) inset; }
+.pt-ink:hover { background: var(--surface-2); }
+.pt-ink.on { background: var(--surface-3); box-shadow: 0 0 0 1px var(--border-2) inset; }
+.pt-size { width: 26px; height: 24px; border-radius: 7px; border: 0; cursor: pointer; background: transparent; display: grid; place-items: center; transition: 0.15s; }
+.pt-size i { display: block; border-radius: 50%; background: var(--muted); }
+.pt-size:hover { background: var(--surface-2); }
+.pt-size.on { background: var(--surface-3); }
+.pt-size.on i { background: var(--text); }
+.pt-import { font-size: 12.5px; padding: 7px 11px; }
+
+.pad-board { position: relative; flex: 1; min-height: 240px; margin: 14px; border-radius: 12px; overflow: hidden; background: #fff; box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--border-2); }
+.pad-board canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+.pad-board canvas.erasing { cursor: cell; }
+.pad-board.dragging { box-shadow: 0 0 0 2px var(--violet); }
+.pad-empty { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 4px; text-align: center; padding: 20px; pointer-events: none; color: #9b95b0; }
+.pad-empty svg { color: #c9c3de; margin-bottom: 4px; }
+.pad-empty p { margin: 0; font-size: 14px; font-weight: 550; color: #4a4560; }
+.pad-empty span { font-size: 12.5px; }
+.pad-drop { position: absolute; inset: 10px; display: grid; place-items: center; border: 2px dashed var(--violet); border-radius: 10px; background: rgba(139, 92, 246, 0.08); color: #4a4560; font-size: 13px; font-weight: 600; pointer-events: none; }
+
+.pad-foot { display: flex; align-items: center; gap: 16px; padding: 0 16px 16px; }
+.pad-hint { flex: 1; min-width: 0; margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--muted-2); }
+.pad-actions { display: flex; gap: 8px; flex: none; }
+@media (max-width: 720px) {
+  .pad-foot { flex-direction: column; align-items: stretch; }
+  .pad-actions { justify-content: flex-end; }
+}
 
 /* ───────────── Workspace ───────────── */
 .workspace { display: flex; flex-direction: column; min-height: 0; background: var(--void-2); }

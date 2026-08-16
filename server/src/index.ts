@@ -12,6 +12,7 @@ import { chatsRouter } from './chats'
 import { publicRouter } from './publish'
 import { cacheRouter } from './cache'
 import { hocuspocus } from './collab'
+import { visionCapability } from './vision'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -19,7 +20,10 @@ const app = express()
 app.use(cors({ origin: isProd ? true : env.CLIENT_ORIGIN }))
 app.use(express.json({ limit: '8mb' }))
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, provider: env.AI_PROVIDER }))
+// Health doubles as the capability probe: whether this deployment can build
+// from a picture depends on env, so the client asks rather than assumes — the
+// sketch button simply isn't offered when nothing can look at an image.
+app.get('/api/health', (_req, res) => res.json({ ok: true, provider: env.AI_PROVIDER, vision: visionCapability() }))
 app.use('/api/auth', authRouter)
 app.use('/api/projects', projectsRouter)
 app.use('/api/chats', chatsRouter)
@@ -54,5 +58,7 @@ server.listen(env.PORT, () => {
   console.log(`\n  ✦ Lumen server ready`)
   console.log(`    http   →  http://localhost:${env.PORT}`)
   console.log(`    ws     →  ws://localhost:${env.PORT}`)
-  console.log(`    ai     →  ${env.AI_PROVIDER}\n`)
+  const vision = visionCapability()
+  console.log(`    ai     →  ${env.AI_PROVIDER}`)
+  console.log(`    vision →  ${vision.supported ? vision.model : 'off — ' + vision.reason}\n`)
 })

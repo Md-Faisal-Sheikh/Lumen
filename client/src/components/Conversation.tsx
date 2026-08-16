@@ -6,6 +6,7 @@ import { Composer } from './Composer'
 import { ChatHistory } from './ChatHistory'
 import { HistoryIcon, Pointer, Recycle, Spark } from '../icons'
 import type { PickedElement } from '../picker'
+import type { Attachment, ImageKind } from '../vision'
 
 interface Message {
   id: string
@@ -13,7 +14,12 @@ interface Message {
   text: string
   authorName?: string
   color?: string
+  /** Thumbnail of the sketch or screenshot this message was built from. */
+  image?: string
+  imageKind?: ImageKind
   hasBuild?: boolean
+  /** Set on the reply when the build came from a picture rather than words. */
+  fromImage?: ImageKind
   fromCache?: boolean // build served straight from the database cache
   reusedFrom?: string // the cached prompt this matched, when it wasn't word-for-word
   similarity?: number // how close the two prompts scored, 0..1
@@ -45,7 +51,7 @@ export function Conversation({
   projectId: string
   messages: Y.Array<Y.Map<any>>
   meta: Y.Map<any>
-  onBuild: (prompt: string) => void
+  onBuild: (prompt: string, image?: Attachment) => void
   /** Re-run a prompt with the build cache bypassed. */
   onRebuild?: (prompt: string) => void
   target?: PickedElement | null
@@ -193,6 +199,14 @@ export function Conversation({
                   <code>{m.context}</code>
                 </div>
               )}
+              {m.image && (
+                <img
+                  className="msg-shot"
+                  src={m.image}
+                  alt={m.imageKind === 'sketch' ? 'The sketch this was built from' : 'The image this was built from'}
+                  title={m.imageKind === 'sketch' ? 'Built from this sketch' : 'Built from this image'}
+                />
+              )}
               <div className="msg-text">{m.text}</div>
               {m.hasBuild &&
                 (m.reusedFrom ? (
@@ -223,8 +237,16 @@ export function Conversation({
                       <Spark width={14} height={14} />
                     </div>
                     <div>
-                      <div className="bc-t">App updated</div>
-                      <div className="bc-s">{m.fromCache ? 'Served instantly from the build library' : 'Running live in the preview'}</div>
+                      <div className="bc-t">
+                        {m.fromImage === 'sketch' ? 'Built from your sketch' : m.fromImage ? 'Rebuilt from your image' : 'App updated'}
+                      </div>
+                      <div className="bc-s">
+                        {m.fromImage
+                          ? 'Generated fresh — image builds never come from the library'
+                          : m.fromCache
+                            ? 'Served instantly from the build library'
+                            : 'Running live in the preview'}
+                      </div>
                     </div>
                   </div>
                 ))}

@@ -1,4 +1,5 @@
 import { env } from './env'
+import { visionCapability, visionModel, visionModels, type ImageAttachment, type ImageKind } from './vision'
 
 // The system instruction handed to whichever free model is configured.
 export const SYSTEM = `You are the build engine for Lumen, a collaborative vibe-coding platform.
@@ -22,6 +23,60 @@ Output format (follow EXACTLY, no markdown, no code fences, no commentary):
    and output the complete contents of EVERY file the project needs (including files you did not change).
 
 Keep it reasonably compact, but complete and working.`
+
+// ── Building from a picture ─────────────────────────────────────────
+// Appended to SYSTEM when an image comes along, so every rule above about the
+// output format still holds — only the reading of the request changes.
+//
+// The two kinds of image are genuinely different requests. A wireframe is a
+// *blueprint*: its lines carry layout and nothing else, and reproducing how it
+// looks would be exactly wrong. A screenshot is a *target*: its look is the
+// whole point. Sending one instruction for both produced sketchy-looking output
+// from wireframes and traced, non-reflowing markup from screenshots.
+
+const SKETCH_RULES = `The user attached a hand-drawn wireframe of the interface they want. Build what it describes.
+
+Reading the drawing:
+- It is LAYOUT, not artwork. Boxes are containers, horizontal lines are lines of text,
+  a box with a cross or diagonal through it is an image placeholder, circles are avatars or
+  icons, a row of short words along the top is navigation, and a long thin box is an input.
+- Handwritten words are LABELS. Use them as the real text of the element they sit in or beside.
+  Never render the handwriting itself, and never reproduce arrows, callouts, or margin notes —
+  those are the user talking to you, not parts of the interface.
+- Reproduce the spatial arrangement faithfully: what sits above what, what sits side by side,
+  relative widths and heights, and which elements are grouped inside a common frame.
+- Where the sketch is ambiguous or a box is unlabelled, choose the most conventional
+  interpretation for that kind of screen and fill it with plausible sample content.
+
+Making it real:
+- The result must look professionally designed — considered spacing, a real type scale, a
+  coherent palette, hover and focus states. The drawing is the blueprint, not the visual style.
+- Nothing may look hand-drawn, sketchy, or wobbly unless the user asked for that in words.`
+
+const SCREENSHOT_RULES = `The user attached a screenshot or reference image of an interface. Rebuild it as a working web page.
+
+Matching it:
+- Match the layout, proportions, and visual hierarchy as closely as you can: the grid, the
+  spacing rhythm, relative sizes, and where the weight of the page sits.
+- Match the palette by eye — background, surfaces, text, and accent — and approximate the type
+  sizes and weights. Transcribe visible text accurately; invent plausible content for anything
+  cropped, blurred, or illegible.
+- Rebuild it with real elements. Never embed the image itself, and never trace it with
+  absolutely-positioned boxes at fixed pixel offsets — the page must reflow and stay responsive.
+- Anything that looks interactive should actually work: tabs switch, menus open, inputs accept
+  text, buttons respond.
+
+If the image carries hand-drawn marks on top of it — arrows, circles, crossings-out, scribbled
+notes — those are instructions about the design, not part of it. Apply what they ask for and
+never reproduce the marks themselves.`
+
+const visionRules = (kind: ImageKind) => (kind === 'sketch' ? SKETCH_RULES : SCREENSHOT_RULES)
+
+// What the user is asking for when an image is the main content of the request.
+const imageLead = (kind: ImageKind) =>
+  kind === 'sketch'
+    ? 'The attached image is a hand-drawn wireframe of the app to build. Build the interface it describes.'
+    : 'The attached image shows the interface to build. Rebuild it as a working web page.'
 
 // The system instruction for precise line edits ("change line 14 in index.html").
 // The model sees the files WITH line numbers and must answer with a minimal set
@@ -82,28 +137,59 @@ Rules:
 
 export type OnDelta = (text: string) => void
 
-function buildUserContent(prompt: string, currentCode?: string): string {
+function buildUserContent(prompt: string, currentCode?: string, image?: ImageAttachment): string {
+  // With an image attached, the picture is the request and anything typed is a
+  // refinement of it — a bare "make it dark" alongside a wireframe must not read
+  // as the whole brief.
+  const ask = image
+    ? prompt.trim()
+      ? `${imageLead(image.kind)}\n\nAlso follow these instructions: ${prompt.trim()}`
+      : imageLead(image.kind)
+    : prompt
+
   if (currentCode && currentCode.trim()) {
-    return `Current project files:\n\n${currentCode}\n\n---\nRequested change: ${prompt}`
+    return `Current project files:\n\n${currentCode}\n\n---\nRequested change: ${ask}`
   }
-  return prompt
+  return ask
 }
 
-// Dispatch one generation to whichever provider is configured.
-async function runModel(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
+// Dispatch one generation to whichever provider is configured. An image, when
+// present, is routed to that provider's vision model — see vision.ts.
+async function runModel(
+  system: string,
+  user: string,
+  temperature: number,
+  onDelta: OnDelta,
+  image?: ImageAttachment
+): Promise<string> {
   switch (env.AI_PROVIDER) {
     case 'gemini':
-      return streamGemini(system, user, temperature, onDelta)
+      return streamGemini(system, user, temperature, onDelta, image)
     case 'ollama':
-      return streamOllama(system, user, temperature, onDelta)
+      return streamOllama(system, user, temperature, onDelta, image)
     case 'openrouter':
     default:
-      return streamOpenRouter(system, user, temperature, onDelta)
+      return streamOpenRouter(system, user, temperature, onDelta, image)
   }
 }
 
-export async function streamBuild(prompt: string, currentCode: string | undefined, onDelta: OnDelta): Promise<string> {
-  return runModel(SYSTEM, buildUserContent(prompt, currentCode), 0.6, onDelta)
+export async function streamBuild(
+  prompt: string,
+  currentCode: string | undefined,
+  onDelta: OnDelta,
+  image?: ImageAttachment
+): Promise<string> {
+  if (image) {
+    // The route checks this before opening the SSE stream so the user gets a
+    // real error instead of an empty build; this is the backstop for any other
+    // caller.
+    const cap = visionCapability()
+    if (!cap.supported) throw new Error(cap.reason ?? 'This server is not configured to build from an image.')
+  }
+  const system = image ? `${SYSTEM}\n\n${visionRules(image.kind)}` : SYSTEM
+  // A picture is a specification. Reading it loosely invents layout that isn't
+  // there, so image builds run cooler than the 0.6 a written prompt gets.
+  return runModel(system, buildUserContent(prompt, currentCode, image), image ? 0.35 : 0.6, onDelta, image)
 }
 
 // Ask the model for line operations against the numbered workspace. Low temperature:
@@ -181,49 +267,119 @@ async function readSSE(
   return full
 }
 
+// A model that can't see fails in a way worth translating: a provider answers
+// 404 for a model that doesn't exist and 400 when it exists but rejects the
+// image part. Either way the fix is the same, and it isn't obvious from the raw
+// body — so say what to change.
+const visionModelHint = (provider: string, models: string[], detail: string) =>
+  `${models.join(', ')} could not read the image (${detail}). ` +
+  `Set ${provider.toUpperCase()}_VISION_MODEL in server/.env to a model that accepts images.`
+
+// Worth trying the next model in the list for: the model is gone, or its shared
+// free pool is saturated. A 400 is the model refusing the request itself, and a
+// 401/402 is the account — neither improves by asking a different model.
+const worthFallingBack = (status: number) => status === 404 || status === 429 || status >= 500
+
 // ── OpenRouter (OpenAI-compatible, free tier) ───────────────────────
-async function streamOpenRouter(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
+async function streamOpenRouter(
+  system: string,
+  user: string,
+  temperature: number,
+  onDelta: OnDelta,
+  image?: ImageAttachment
+): Promise<string> {
   if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set. Add a key from openrouter.ai/keys')
-  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:5173',
-      'X-Title': 'Lumen',
-    },
-    body: JSON.stringify({
-      model: env.OPENROUTER_MODEL,
-      stream: true,
-      temperature,
-      max_tokens: 8000,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-    }),
-  })
-  if (!r.ok || !r.body) throw new Error(`OpenRouter error ${r.status}: ${await safeText(r)}`)
-  return readSSE(r.body, (j) => {
-    const d = j?.choices?.[0]?.delta?.content
-    return typeof d === 'string' ? d : ''
-  }, onDelta)
+
+  // Text builds use the one configured model. Image builds walk the vision list
+  // until one answers — see visionModels() for why that list exists. Only the
+  // opening response is retried: once deltas are flowing the client has already
+  // written them into the shared document, and starting over would double them.
+  const candidates = image ? visionModels('openrouter') : [env.OPENROUTER_MODEL]
+  // OpenAI-compatible multimodal: the user turn becomes an array of parts. The
+  // image goes first — the text that follows refers back to it.
+  const content = image
+    ? [
+        { type: 'image_url', image_url: { url: `data:${image.mime};base64,${image.data}` } },
+        { type: 'text', text: user },
+      ]
+    : user
+
+  let lastStatus = 0
+  let lastDetail = ''
+
+  for (let i = 0; i < candidates.length; i++) {
+    const model = candidates[i]
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://localhost:5173',
+        'X-Title': 'Lumen',
+      },
+      body: JSON.stringify({
+        model,
+        stream: true,
+        temperature,
+        max_tokens: 8000,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content },
+        ],
+      }),
+    })
+
+    if (r.ok && r.body) {
+      if (i > 0) console.log(`  vision → fell back to ${model} (${candidates[i - 1]} answered ${lastStatus})`)
+      return readSSE(r.body, (j) => {
+        const d = j?.choices?.[0]?.delta?.content
+        return typeof d === 'string' ? d : ''
+      }, onDelta)
+    }
+
+    lastStatus = r.status
+    lastDetail = await safeText(r)
+    if (i < candidates.length - 1 && worthFallingBack(r.status)) continue
+
+    if (image && (r.status === 400 || r.status === 404)) {
+      throw new Error(visionModelHint('openrouter', candidates, `OpenRouter ${r.status}`))
+    }
+    throw new Error(`OpenRouter error ${r.status}: ${lastDetail}`)
+  }
+
+  // Only reachable if the list was empty, which visionCapability() rules out.
+  throw new Error('No OpenRouter model is configured.')
 }
 
 // ── Google Gemini (free tier) ───────────────────────────────────────
-async function streamGemini(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
+async function streamGemini(
+  system: string,
+  user: string,
+  temperature: number,
+  onDelta: OnDelta,
+  image?: ImageAttachment
+): Promise<string> {
   if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is not set. Add a free key from aistudio.google.com/apikey')
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:streamGenerateContent?alt=sse&key=${env.GEMINI_API_KEY}`
+  const model = image ? visionModel('gemini') : env.GEMINI_MODEL
+  const parts: Array<Record<string, unknown>> = image
+    ? [{ inline_data: { mime_type: image.mime, data: image.data } }, { text: user }]
+    : [{ text: user }]
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${env.GEMINI_API_KEY}`
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: user }] }],
+      contents: [{ role: 'user', parts }],
       generationConfig: { temperature, maxOutputTokens: 8192 },
     }),
   })
-  if (!r.ok || !r.body) throw new Error(`Gemini error ${r.status}: ${await safeText(r)}`)
+  if (!r.ok || !r.body) {
+    const detail = await safeText(r)
+    if (image && (r.status === 400 || r.status === 404)) throw new Error(visionModelHint('gemini', [model], `Gemini ${r.status}`))
+    throw new Error(`Gemini error ${r.status}: ${detail}`)
+  }
   return readSSE(r.body, (j) => {
     const parts = j?.candidates?.[0]?.content?.parts
     if (!Array.isArray(parts)) return ''
@@ -232,21 +388,38 @@ async function streamGemini(system: string, user: string, temperature: number, o
 }
 
 // ── Ollama (fully local, free, newline-delimited JSON) ──────────────
-async function streamOllama(system: string, user: string, temperature: number, onDelta: OnDelta): Promise<string> {
+async function streamOllama(
+  system: string,
+  user: string,
+  temperature: number,
+  onDelta: OnDelta,
+  image?: ImageAttachment
+): Promise<string> {
+  const model = image ? visionModel('ollama') : env.OLLAMA_MODEL
+  // Ollama takes images as a sibling array of bare base64 strings on the turn.
+  const message = image
+    ? { role: 'user', content: user, images: [image.data] }
+    : { role: 'user', content: user }
+
   const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: env.OLLAMA_MODEL,
+      model,
       stream: true,
       options: { temperature },
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
+      messages: [{ role: 'system', content: system }, message],
     }),
   })
-  if (!r.ok || !r.body) throw new Error(`Ollama error ${r.status}: ${await safeText(r)}. Is Ollama running?`)
+  if (!r.ok || !r.body) {
+    const detail = await safeText(r)
+    // 404 from a local Ollama means the model was never pulled — a fixable thing
+    // to be told, rather than "is Ollama running?" when it plainly is.
+    if (image && r.status === 404) {
+      throw new Error(`Ollama doesn't have "${model}". Run:  ollama pull ${model}`)
+    }
+    throw new Error(`Ollama error ${r.status}: ${detail}. Is Ollama running?`)
+  }
   const reader = r.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''

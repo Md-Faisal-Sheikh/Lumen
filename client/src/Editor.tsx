@@ -22,6 +22,7 @@ import {
 } from './files'
 import { createZip, downloadBlob } from './zip'
 import { describeTarget, instrumentPreview, type PickedElement } from './picker'
+import type { Attachment } from './vision'
 import { TopBar } from './components/TopBar'
 import { Conversation } from './components/Conversation'
 import { PreviewPane } from './components/PreviewPane'
@@ -306,18 +307,29 @@ function Room({
   // The build: stream generated code into the shared Yjs files so everyone watches it write.
   // The model emits `===== FILE: path =====` sections; the writer splits the stream into
   // index.html, styles.css, app.js, … live, so files pop into the explorer as they're written.
-  const runBuild = async (prompt: string, opts?: { noCache?: boolean }) => {
+  //
+  // `image` is a sketch drawn in the pad or a screenshot that was dropped in. It
+  // carries the request that words were bad at, so it changes three things here:
+  // the words become optional, the line-edit shortcut is off, and the reply says
+  // where the app came from.
+  const runBuild = async (prompt: string, image?: Attachment, opts?: { noCache?: boolean }) => {
     if (ymeta.get('building')) return
     const indexNow = ytext.toString()
     const target = pickTarget
+    // With no words typed, the picture is the whole request — give it a sentence
+    // so the chat, the version history, and the model all read the same thing.
+    const said =
+      prompt.trim() ||
+      (image ? (image.kind === 'sketch' ? 'Build this sketch.' : 'Rebuild this screen.') : '')
     // Prompts that name specific line numbers become precise line edits —
     // nothing is cleared or regenerated, only the named lines change. A picked
-    // element already names its own target, so it never takes that path.
-    if (!target && indexNow.trim() && isLineEditPrompt(prompt)) return runLineEdit(prompt)
+    // element already names its own target, so it never takes that path, and
+    // neither does an image: a picture is never a line edit.
+    if (!target && !image && indexNow.trim() && isLineEditPrompt(said)) return runLineEdit(said)
     // Hand the model every current file (marker format) so it can modify the project.
     const currentCode = indexNow.trim() ? serializeWorkspace(indexNow, filesSnapshot()) : ''
     // What the user typed is what the chat shows; the model gets the element too.
-    const request = target ? describeTarget(target, prompt) : prompt
+    const request = target ? describeTarget(target, said) : said
     setPickTarget(null)
     setPicking(false)
 
@@ -326,8 +338,13 @@ function Room({
       role: 'user',
       authorName: user!.name,
       color: user!.color,
-      text: prompt,
+      text: said,
       context: target?.label,
+      // The thumbnail, never the full image: this lives in the CRDT forever and
+      // syncs to everyone in the room. What was sent to the model is a few
+      // hundred KB; what the chat needs is a few.
+      image: image?.thumb,
+      imageKind: image?.kind,
       ts: Date.now(),
     })
     ydoc.transact(() => {
@@ -358,9 +375,25 @@ function Room({
       const res = await fetch(`${API_URL}/api/projects/${projectId}/build`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-        body: JSON.stringify({ prompt: request, currentCode, noCache: opts?.noCache === true }),
+        body: JSON.stringify({
+          prompt: request,
+          currentCode,
+          noCache: opts?.noCache === true,
+          image: image ? { mime: image.mime, data: image.data, kind: image.kind } : undefined,
+        }),
       })
-      if (!res.ok || !res.body) throw new Error('The build could not start.')
+      if (!res.ok || !res.body) {
+        // A rejected build answers with JSON before the stream opens — an
+        // unreadable attachment or a server with no vision model says exactly
+        // what is wrong, and that is worth more than "it didn't start".
+        let message = 'The build could not start.'
+        try {
+          message = (await res.json())?.error || message
+        } catch {
+          /* not JSON — keep the generic line */
+        }
+        throw new Error(message)
+      }
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -420,11 +453,12 @@ function Room({
         text: reply,
         hasBuild: true,
         fromCache,
+        fromImage: image?.kind,
         // Only set when the cache matched loosely — the chat has to say so, and
         // offer a way out, rather than quietly serving somebody else's app.
         reusedFrom,
         similarity,
-        prompt,
+        prompt: said,
         ts: Date.now(),
       })
       if (voiceOut) speak(reply)
@@ -442,8 +476,9 @@ function Room({
   }
 
   // The reused build wasn't what they meant. Run the same prompt again with the
-  // cache bypassed, so they get one generated for them.
-  const rebuildFresh = (prompt: string) => runBuild(prompt, { noCache: true })
+  // cache bypassed, so they get one generated for them. Only ever offered for a
+  // text build — an image build never consulted the cache in the first place.
+  const rebuildFresh = (prompt: string) => runBuild(prompt, undefined, { noCache: true })
 
   // Precise line edits: the server turns "change line 14 in index.html" into
   // validated line operations against a snapshot of the current files, and we

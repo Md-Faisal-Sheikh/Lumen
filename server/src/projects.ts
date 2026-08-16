@@ -16,6 +16,7 @@ import {
 } from './edits'
 import { makeSlug, publicUrl } from './publish'
 import { lookupBuild, storeBuild } from './cache'
+import { parseImage, visionCapability, type ImageAttachment } from './vision'
 
 export const projectsRouter = Router()
 
@@ -204,7 +205,25 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const currentCode = req.body?.currentCode ? String(req.body.currentCode) : undefined
   // Set when the user rejected a reused build and wants this one generated.
   const noCache = req.body?.noCache === true
-  if (!prompt.trim()) return res.status(400).json({ error: 'Describe what to build.' })
+
+  // A sketch or screenshot, if one came along. Validated before a single header
+  // goes out: once the SSE stream is open the only way to report a problem is an
+  // error frame, and "your PNG is 30 MB" deserves a plain 400.
+  let image: ImageAttachment | undefined
+  if (req.body?.image != null) {
+    const cap = visionCapability()
+    if (!cap.supported) {
+      return res.status(400).json({ error: cap.reason ?? 'This server is not configured to build from an image.' })
+    }
+    const parsed = parseImage(req.body.image)
+    if ('error' in parsed) return res.status(400).json({ error: parsed.error })
+    image = parsed.image
+  }
+
+  // With an image attached the words are optional — the picture is the request.
+  if (!prompt.trim() && !image) return res.status(400).json({ error: 'Describe what to build.' })
+  // What the version history calls this build.
+  const label = prompt.trim() || (image?.kind === 'sketch' ? 'Built from a sketch' : 'Built from a screenshot')
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -219,11 +238,17 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
     // this idea — the same words, or close enough — serve it straight from the
     // database with no AI call. A loose match reports what it reused so the
     // client can show it and offer to generate a fresh one instead.
-    if (!currentCode && !noCache) {
+    //
+    // An image build never consults the cache. The cache is keyed on prompt text
+    // alone, and here the text is a footnote to a picture: two people can type
+    // "build this" over completely different wireframes, so a text match would
+    // hand one of them the other's app. Nor is the result stored, which would
+    // poison that key for every text build that follows.
+    if (!currentCode && !noCache && !image) {
       const hit = await lookupBuild(prompt)
       if (hit) {
         for (let i = 0; i < hit.output.length; i += 4096) send({ delta: hit.output.slice(i, i + 4096) })
-        await prisma.version.create({ data: { projectId: req.params.id, prompt, html: hit.output } })
+        await prisma.version.create({ data: { projectId: req.params.id, prompt: label, html: hit.output } })
         await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
         send({
           done: true,
@@ -236,16 +261,16 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
       }
     }
 
-    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }))
+    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }), image)
     const summary = extractSummary(full)
 
     // Persist a version snapshot and bump the project's updatedAt.
-    await prisma.version.create({ data: { projectId: req.params.id, prompt, html: full } })
+    await prisma.version.create({ data: { projectId: req.params.id, prompt: label, html: full } })
     await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
 
     // Save fresh builds into the shared cache: the next person who asks for
     // this — in these words or near enough — gets it from the database.
-    if (!currentCode) await storeBuild(prompt, full, summary)
+    if (!currentCode && !image) await storeBuild(prompt, full, summary)
 
     send({ done: true, summary })
   } catch (err: any) {

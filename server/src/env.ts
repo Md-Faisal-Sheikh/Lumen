@@ -21,6 +21,22 @@ export const env = {
 
   OLLAMA_URL: process.env.OLLAMA_URL ?? 'http://localhost:11434',
   OLLAMA_MODEL: process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b',
+
+  // ── Vision: the model used only when a sketch or screenshot is attached ──
+  // A provider's best *coding* model usually can't see, so images get their own
+  // model and text builds keep running on the ones above. Set any of these to
+  // an empty string to turn image builds off for that provider.
+  //
+  // OpenRouter's is a comma-separated fallback list, because its free pool is
+  // shared: a model can be retired outright (404) or busy (429), and either is
+  // survivable if there's a next one to try. Pin it to a single name if you'd
+  // rather know when your choice is unavailable than get a quiet substitute.
+  OPENROUTER_VISION_MODEL:
+    process.env.OPENROUTER_VISION_MODEL ??
+    'google/gemma-4-31b-it:free,nvidia/nemotron-nano-12b-v2-vl:free,google/gemma-4-26b-a4b-it:free',
+  // Gemini's default is already multimodal, so it doubles as its own vision model.
+  GEMINI_VISION_MODEL: process.env.GEMINI_VISION_MODEL ?? '',
+  OLLAMA_VISION_MODEL: process.env.OLLAMA_VISION_MODEL ?? 'qwen2.5vl:7b',
 }
 
 export const isProd = env.NODE_ENV === 'production'

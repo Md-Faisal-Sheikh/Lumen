@@ -79,6 +79,30 @@ export function starterContent(path: string): string {
 
 const FILE_MARKER_RE = /^\s*={3,}\s*FILE:\s*(.+?)\s*={3,}\s*$/
 const SUMMARY_LINE_RE = /^\s*<!--\s*SUMMARY\b/i
+// A line that is nothing but a markdown fence, with an optional language tag.
+const FENCE_RE = /^\s*(?:```|~~~)\s*([A-Za-z0-9+#.-]*)\s*$/
+
+// Which file a fenced block belongs in. Smaller models — the vision models a
+// sketch build runs on, in particular — ignore the marker protocol and answer
+// in markdown instead, but they still split the project correctly and label
+// each block with its language. That is the same information under a different
+// name, so it is read rather than thrown away.
+function pathForLanguage(lang: string): string | null {
+  switch (lang.toLowerCase()) {
+    case 'html':
+    case 'htm':
+      return INDEX_FILE
+    case 'css':
+      return 'styles.css'
+    case 'js':
+    case 'jsx':
+    case 'mjs':
+    case 'javascript':
+      return 'app.js'
+    default:
+      return null
+  }
+}
 
 // Serialize the whole workspace in the same marker format, so a rebuild can
 // hand the model every current file to modify.
@@ -113,9 +137,18 @@ export function createBuildWriter(target: {
   let current: string | null = null // null until the first marker/content arrives
   let summarySkipped = false
   let heldBlanks = '' // blank lines withheld until we know they're interior, not section separators
+  // Which shape the response turned out to be, decided by its first real line
+  // and never revisited. A model that used the markers is read as before; one
+  // that answered in markdown has its fences read as section boundaries. Fixing
+  // the protocol once, up front, is what keeps a stray ``` inside a *generated*
+  // app — a markdown editor's sample text, say — from being mistaken for one.
+  let protocol: 'unknown' | 'marker' | 'fence' | 'plain' = 'unknown'
+  let insideFence = false
+  let openedAny = false
 
   const open = (path: string) => {
     current = path
+    openedAny = true
     heldBlanks = ''
     // Every marker promises the file's complete contents, so restart it even
     // if this path already streamed once (a re-emit replaces, never doubles).
@@ -126,18 +159,57 @@ export function createBuildWriter(target: {
   const handleLine = (line: string) => {
     const marker = line.match(FILE_MARKER_RE)
     if (marker) {
+      protocol = 'marker'
       const path = normalizePath(marker[1])
       if (path) open(path)
       // Unusable path — drop the marker line rather than writing it as code.
       return
     }
-    if (current === null) {
-      if (!line.trim()) return // leading blank lines belong to no file
-      if (!summarySkipped && SUMMARY_LINE_RE.test(line)) {
-        summarySkipped = true // the summary comment is chat metadata, not code
+
+    // The summary is chat metadata, not code. By protocol it is the response's
+    // very first line, ahead of any file — but a model that answers in markdown
+    // puts it *inside* the first block instead, where it would be written into
+    // index.html and shipped in the exported ZIP. Drop the first one wherever
+    // it lands; a later one belongs to the generated app.
+    if (!summarySkipped && SUMMARY_LINE_RE.test(line)) {
+      summarySkipped = true
+      return
+    }
+
+    if (protocol === 'unknown' || protocol === 'fence') {
+      const fence = line.match(FENCE_RE)
+      if (fence) {
+        protocol = 'fence'
+        if (insideFence) {
+          insideFence = false
+          current = null // between blocks until the next fence opens a file
+        } else {
+          insideFence = true
+          // An unlabelled *first* block is the whole document. An unlabelled
+          // later one can't be placed — appending it to whichever file happens
+          // to be open would corrupt that file, so it is dropped instead.
+          const path = pathForLanguage(fence[1]) ?? (openedAny ? null : INDEX_FILE)
+          if (path) open(path)
+          else current = null
+        }
         return
       }
-      open(INDEX_FILE) // no marker yet → single-document fallback
+      // In a markdown answer, `current === null` means either the model's prose
+      // between blocks ("Here's the CSS:") or a block we couldn't place.
+      if (protocol === 'fence' && current === null) return
+    }
+
+    if (current === null) {
+      if (!line.trim()) return // leading blank lines belong to no file
+      if (protocol === 'unknown') {
+        // Still deciding. A line that isn't a marker, a fence, or the start of
+        // markup is the model clearing its throat — "Sure! Here's the page:".
+        // Committing to the single-document shape on it would write the chatter
+        // into index.html *and* make the fences that follow look like content.
+        if (!/^\s*</.test(line)) return
+        protocol = 'plain'
+      }
+      open(INDEX_FILE) // markup with no marker and no fence: a single document
     }
     if (!line.trim()) {
       heldBlanks += line // flushed only if real content follows in the same file
