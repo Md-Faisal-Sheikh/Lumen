@@ -19,6 +19,8 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 - **Iterate by conversation** — every follow-up ("make the header sticky", "use a dark theme") modifies the running app.
 - **Point at it instead of describing it** — arm the picker, hover the live preview to outline elements, and click one. The chat then knows exactly which element you mean, so *"make it bigger and green"* lands on that button and nothing else.
 - **Inline edits with Ctrl+K** — select lines in the editor, press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, and say what to change. Because the exact line range travels with the request, only those lines are rewritten — the rest of the file stays byte-identical.
+- **The editor completes as you type** — pause mid-line and the rest of it appears in grey ahead of the caret; <kbd>Tab</kbd> takes it, <kbd>Esc</kbd> dismisses it, <kbd>Alt</kbd>+<kbd>\\</kbd> asks on demand. The suggestion never enters the shared document until you accept it, so nobody else in the room sees a proposal you didn't take.
+- **Push to GitHub** — connect an account once, point the project at a repository, and every file lands at its real path in one real commit. Add a README on GitHub and Lumen leaves it alone; delete a file here and the next push removes it there.
 - **Voice mode** — tap the mic and *talk*. Dictation keeps listening through the pauses you take to think, you can still type mid-sentence without the two fighting over the box, and Lumen can read its replies back aloud. Powered by the browser's built-in Web Speech API — free, no key, nothing to install.
 - **Draw it instead of describing it** — open the sketch pad and scribble a wireframe: boxes, lines, a few labels. Lumen reads the drawing as *layout* and builds the interface it describes. Drop a screenshot in instead and it rebuilds that screen as a real, responsive page — and anything you scrawl on top of the screenshot is read as an instruction, not copied.
 - **A build library that recognises paraphrases** — ask for *"snake game with neon colors"* when someone already built *"a neon snake game"* and you get it instantly, with no AI call. The cache matches on meaning, not on exact wording, and always tells you when it reused something.
@@ -34,6 +36,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 | Editor | CodeMirror 6 + `y-codemirror.next` | collaborative editing + in-editor cursors |
 | Real-time | **Yjs** CRDT over self-hosted **Hocuspocus** WebSocket server | you host it; no SaaS |
 | AI engine | **OpenRouter** · **Google Gemini** · **Ollama** (pluggable) | all have free tiers; Ollama is fully local |
+| Git hosting | **GitHub REST API** + a pasted personal access token | no OAuth app to register, no client secret to host |
 | Sketch input | `<canvas>` + the same free providers' vision models | drawing, scaling and encoding all happen in the browser |
 | API | Node + Express | open-source |
 | Auth | JWT + bcrypt (local) | no external auth provider |
@@ -170,6 +173,59 @@ Two ways to change one thing without regenerating the app:
 
 The picker is a small script injected into the preview document only. It stays inert until armed, swallows the click sequence so picking never fires the app's own buttons, and never touches the project's real files — it isn't in the editor, in a version snapshot, or in the exported ZIP. The preview iframe is sandboxed without `allow-same-origin`, so the two sides talk purely over `postMessage` and the parent authenticates replies by window identity.
 
+### The editor finishes your line
+
+Stop typing for a moment and the rest of the line appears in grey ahead of the caret. <kbd>Tab</kbd> accepts it, <kbd>Esc</kbd> dismisses it, <kbd>Alt</kbd>+<kbd>\\</kbd> asks for one at a caret that has been sitting still. The toggle for it is in the top bar.
+
+The suggestion is a **decoration, never text**. That distinction matters more here than in a normal editor, because this document is a CRDT shared with everyone else in the room: a suggestion that lived in the document would stream into their editors as though somebody had typed it, land in the live preview, and be captured by the next version snapshot. So it exists only in the view, and accepting it is an ordinary insertion the collaborative layer syncs like any keystroke.
+
+Three things about an *unasked-for* feature shape the rest of it:
+
+- **Only the person typing triggers a request.** During a build the document changes every 90ms, and a collaborator's edits arrive constantly. Chasing either would fire a model call per chunk and suggest into a file nobody is looking at, so the trigger distinguishes local typing from every other way text can appear — and an accepted suggestion is marked so that pressing Tab doesn't immediately request the next one.
+- **A failure is silence.** There is nothing a user can do about a completion that didn't arrive, so nothing is reported: no toast, no inline error. Suggestions simply stop appearing. The one exception is the server, which returns a real error status so a misconfigured deployment is diagnosable from the network tab instead of looking like a model that never has an idea.
+- **It is rate limited** (40/minute/user) and **superseded requests are aborted**. A held-down key is otherwise a burst of calls, and a free-tier provider answers a burst with 429s that then break builds and edits for everyone sharing the key. When the next keystroke arrives, the browser drops the request and the server aborts its own upstream call rather than finishing into nobody's screen.
+
+**It runs on its own model, and that is not a detail.** Asked to finish `const sorted = items.`, the default build model — a reasoning model — replied *"The user wants to sort the items array in ascending order. The prefix shows…"* for three paragraphs and hit the token cap before writing any code. A completion has about a second to be useful, so it gets a small instruct model of its own (`OPENROUTER_COMPLETION_MODEL`) and builds keep the good one. This is the same split, for a different reason, as the separate vision model above. A `looksLikeProse` guard catches the reasoning case anyway if someone points the variable at a thinking model.
+
+> A general "this looks like prose, not code" check was tried there and removed. Scoring how little code punctuation the answer contains does flag reasoning — and also flags two things that are perfectly good completions: a paragraph of page copy inside a tag, and a sentence-long code comment. Withholding those to catch a case that configuration already fixes was the wrong trade, so the guard stays narrow and the README says so.
+
+What actually comes back is cleaned up before it is shown, because small models are consistently wrong in the same three ways. They answer in markdown, so a fenced block's contents are taken as the answer. They re-type the line they were given, so `const sorted = items.` + `const sorted = items.length` is detected and the echo dropped. And they close a brace the file already closes:
+
+```
+suffix "\n}"   completion "…\n}"     → the same brace, dropped
+suffix "\n}"   completion "…\n  }"   → closes an inner block, kept
+```
+
+That comparison is **literal, indentation included**, and that is the whole trick — a duplicate sits at the same indentation as the real closer, while a closer belonging to a block opened inside the completion is nested deeper. An earlier version normalized the whitespace away first, which makes those two cases identical and silently deletes the inner brace. It was caught by a test, and both cases are now in the suite.
+
+> **On latency.** Against OpenRouter's free pool a suggestion takes roughly 1–8 seconds, and the slow end is slow enough that you will often have typed past it — in which case it is correctly discarded rather than shown. That is the cost of a shared free tier, not of the feature: on a local Ollama the same completions come back in a few hundred milliseconds, which is what this is meant to feel like.
+
+### Push to GitHub
+
+The ZIP export gives you a folder. This gives you history.
+
+**Share → the GitHub button** connects an account, points the project at a repository, and commits. Every file lands at its real path in a single commit on a branch you can clone, deploy from Pages, or open a pull request against.
+
+Three decisions are worth knowing:
+
+**A pasted token, not an OAuth app.** OAuth would mean registering an application, holding a client secret, and hosting a callback URL — three things every self-hosted Lumen would have to be configured with. A personal access token needs none of them and works on a laptop with no public hostname, which is the deployment this project is actually built for. Lumen validates the token with GitHub *before* storing it, so a bad paste is an error in the dialog rather than a mysterious failure on the first push.
+
+**The commit is built through the Git Data API.** Writing files one at a time through the contents API would produce one commit per file and leave the repository in a broken half-state if the third of five failed. Instead Lumen does what `git` does: read the branch, build a tree on top of its tree, write a commit with the old head as its parent, then move the ref. Nothing is visible in the repository until that last step, so a failure anywhere leaves the branch exactly where it was. An identical tree means the workspace already matches the branch, and it reports *"already up to date"* rather than adding an empty commit to your history every time you press the button.
+
+> **A repository with no commits is a special case, and getting it wrong is what broke the first version of this.** Every Git-database endpoint — blobs, trees, commits, refs — answers `409 Conflict · "Git Repository is empty."` until a repository contains something, so the tree-based push above cannot bootstrap one. [GitHub's own guidance](https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-your-git-database) is to initialize through the *contents* API instead, which creates a file, the first commit, and the branch in one call.
+>
+> So an empty repo is initialized with a throwaway `.lumen-init`, and then the workspace goes in as a **root commit** which the branch is moved onto — leaving the placeholder unreferenced and the branch's entire history as your own single commit. No `.lumen-init`, no "Initial commit" sitting above your work. That move is the one place Lumen forces a ref, and it is safe in a way a real force push is not: the commit being discarded was written by the same request seconds earlier and contains one file nobody has ever seen. The two 409s are also told apart — *empty* is handled, while *"repository is unavailable"* (GitHub still creating it) is the one that really is worth retrying.
+
+**A push adds and updates; it deletes only what Lumen itself put there.** The commit sets `base_tree` to the branch's current tree, so a README, a licence, or a CI workflow that Lumen never wrote is carried through untouched. That alone would leave a file you deleted in Lumen living in the repository forever — so each push records the paths it wrote, and the next one explicitly removes the ones that are gone. Nothing outside that list is ever touched, and re-linking to a different repository clears it, since it describes what Lumen wrote in the *old* one.
+
+Who can do what follows the same rule as inviting and publishing: **the owner chooses the repository** (it decides where everyone's pushes land), and **any member can push with their own account**. The repository belongs to the project; the credential, and therefore the commit's authorship, belongs to the person.
+
+> **The token is encrypted at rest.** A token with `repo` scope can push to every repository its owner can reach, so it is not something to keep in a column next to an email address. It is sealed with AES-256-GCM before it is written, never returned to the browser, and only ever opened to make one request. The key is derived from `JWT_SECRET` with scrypt rather than being a fourth thing to configure — which does couple them: **changing `JWT_SECRET` makes stored tokens unreadable**, and everyone is asked to reconnect rather than seeing a crash.
+
+Errors are translated, because the raw ones are unhelpful at exactly the moments that matter. A token missing the `repo` scope and a repository that does not exist both answer `404`, since GitHub will not confirm the existence of something you cannot see — so Lumen says which two things to check instead of relaying "Not Found". A `403` is both "rate limited" and "not allowed", separated by the remaining-quota header. And if someone pushes to the branch between Lumen reading the head and moving the ref, that is reported rather than resolved by force — nobody's commit is discarded to make the button work.
+
+**Importing a repository is deliberately not included.** Lumen runs static HTML/CSS/JS in a sandboxed iframe, so importing an arbitrary repository would mostly produce files that cannot run — a React project would land in the editor and do nothing. Pushing out is a complete story; pulling in is a different feature that needs a different runtime.
+
 ### Take the project with you
 
 The **download** button in the top bar packages the workspace as `your-project.zip` — every file at its real path, folders intact:
@@ -187,6 +243,54 @@ That's the whole app. Unzip it and open `index.html`, drop the folder onto Netli
 
 The archive is assembled in the browser by `client/src/zip.ts`, a from-scratch ZIP writer: CRC-32 checksums, DEFLATE via the platform's `CompressionStream`, local headers, a central directory, and the end-of-central-directory record. No JSZip, no upload, no server round-trip — which also means exporting works offline and costs nothing to host. Browsers without `CompressionStream` (older Safari) transparently get a valid uncompressed archive instead.
 
+## If builds feel slow
+
+Three separate things get blamed on "the model is slow", and they have different fixes.
+
+**The daily cap, which is usually the real one.** OpenRouter's free tier allows roughly 50 requests a day; past that everything answers `429 Rate limit exceeded: free-models-per-day`. Before you hit the wall, free requests are also deprioritised behind paying traffic, so they queue — and queueing is indistinguishable from a slow model from the outside. A one-time 10-credit top-up raises the ceiling to 1000/day. Check it first: if a build fails outright rather than crawling, this is why.
+
+**The model's size.** The default is `nvidia/nemotron-3-ultra-550b-a55b:free` — 550B parameters, the largest on the free list. What matters most here isn't total time but **time to first token**, because the whole room watches the code stream in; a model that starts writing in two seconds feels fast even if it finishes no sooner. `nvidia/nemotron-3.5-lightning:free`, `google/gemma-4-26b-a4b-it:free` (26B with 4B active), and `nvidia/nemotron-3-nano-30b-a3b:free` are all much smaller.
+
+**Reasoning tokens.** Every model on the free tier is now a reasoning model, and each one thinks — in time and tokens — before the first character of your app appears. Lumen's request is *"emit these files in this marker format"*, which is a formatting job rather than a puzzle, so most of that deliberation buys nothing. `OPENROUTER_REASONING=none` (or `minimal`) skips it.
+
+> How much this wastes is measurable at the small end: asked to complete the single line `const sorted = items.`, the default build model replied with three paragraphs about what the user probably meant and hit its token cap before writing any code. On a build the same thinking happens; you just don't see it, because [`files.ts`](client/src/files.ts) drops any prose that arrives before the first file marker rather than writing it into `index.html`.
+
+**Inline suggestions make the cap much worse, and that is worth planning for.** Ghost text fires on every pause in typing, so on a ~50/day allowance a few minutes of editing can spend the whole day and leave nothing for builds. Two ways out, and they compose:
+
+- **Point completions at a different model from builds.** Providers meter per model, so `GEMINI_COMPLETION_MODEL=gemini-2.5-flash-lite` draws down Lite's larger allowance while builds keep Flash's.
+- **Point them at a different *provider*.** `COMPLETION_PROVIDER=ollama` runs ghost text on a small local model — free and instant, no allowance at all — while builds stay on whichever remote provider is configured. This is the configuration to want: the two jobs have opposite requirements, and nothing says one provider has to serve both.
+
+**Running locally with Ollama** removes the queue, the cap and the shared pool entirely, and is the only setup where suggestions feel the way they are meant to — a few hundred milliseconds rather than 1–8 seconds.
+
+```bash
+ollama pull qwen2.5-coder:7b
+# server/.env
+AI_PROVIDER=ollama
+```
+
+> **Check the machine can hold the model first.** A 7B needs roughly 5–6 GB of *free* memory, a 3B about 2.5 GB, a 1.5B about 1.5 GB. Below that Ollama fails with `unable to allocate CPU_REPACK buffer`, which names the symptom and not the cause — so Lumen translates it into "not enough free memory on this machine" and suggests a smaller model. A laptop with 8 GB total is usually already near its limit running an editor, a browser and the dev server, which makes it a reasonable host for *completions* on a small model and a poor one for builds at any size.
+>
+> `OLLAMA_COMPLETION_NUM_CTX` is the lever that matters on a tight machine, and it is nearly free to pull: a completion's prompt is a fixed window around the caret, so 2048 tokens is already generous and everything above that is KV cache nobody reads. Measured on a 3B, dropping the context took the largest single allocation from 1.24 GiB to 569 MiB. Builds have no equivalent saving — they genuinely need the context — which is the concrete reason to run builds remotely and completions locally rather than trying to do both in one place.
+>
+> Check the fit before starting the server, so a failure is one clear line instead of silently absent suggestions:
+>
+> ```bash
+> ollama run qwen2.5-coder:3b "say ok"
+> ```
+
+Two things already work in your favour whatever you choose. The **build library** answers a repeated or paraphrased prompt from the database with no model call at all, so the second person to ask for a tic-tac-toe game waits on nothing. And builds **stream**, so the wait is visible progress rather than a spinner.
+
+## Tests
+
+```bash
+npm test
+```
+
+No test framework and nothing to install — the files are plain assertions run by `tsx`, in the same spirit as the hand-written ZIP writer. They cover the two places where being wrong is quiet rather than loud:
+
+- **`completion.test.ts`** — the ghost-text sanitizer. Fences, prefix echoes, the duplicated-closer cases (including the nested `}` that must *survive*), the runaway-answer clamp, and the reasoning-model guard with the real captured failure as its fixture.
+- **`github.test.ts`** — `pushCommit` driven against a stubbed GitHub, asserting the exact call sequence for all six states a branch can be in: empty repository, ordinary push, files Lumen never wrote, nothing-to-do, branch-not-created-yet, and a mid-flight race. Both bugs found in these paths were found here.
+
 ## Configuration (`server/.env`)
 
 | Variable | Default | Notes |
@@ -198,13 +302,20 @@ The archive is assembled in the browser by `client/src/zip.ts`, a from-scratch Z
 | `DATABASE_URL` | `file:./dev.db` | SQLite by default |
 | `AI_PROVIDER` | `openrouter` | `openrouter` \| `gemini` \| `ollama` |
 | `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | — / `nvidia/nemotron-3-ultra-550b-a55b:free` | |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | — / `gemini-2.0-flash` | |
+| `OPENROUTER_REASONING` | — | `none` \| `minimal` \| `low` \| `medium` \| `high`; blank leaves each model's default. See [If builds feel slow](#if-builds-feel-slow) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | — / `gemini-2.5-flash` | |
+| `COMPLETION_PROVIDER` | — | blank = same provider as builds; set it to run ghost text somewhere else (e.g. a local Ollama) |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `qwen2.5-coder:7b` | |
 | `OPENROUTER_VISION_MODEL` | a 3-model free fallback list | used **only** when a sketch or screenshot is attached; comma-separated, tried in order |
 | `GEMINI_VISION_MODEL` | — | blank = reuse `GEMINI_MODEL`, which is already multimodal |
 | `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | needs `ollama pull qwen2.5vl:7b` |
+| `OPENROUTER_COMPLETION_MODEL` | a 3-model free fallback list | the editor's ghost text; a small instruct model, **not** the build model |
+| `GEMINI_COMPLETION_MODEL` | — | blank = reuse `GEMINI_MODEL` |
+| `OLLAMA_COMPLETION_MODEL` | `qwen2.5-coder:7b` | already small and fast; same as the build model is fine |
 
-Blank out the vision variable for your provider to turn image builds off; the sketch button then doesn't appear.
+Blank out the vision variable for your provider to turn image builds off; the sketch button then doesn't appear. Blank out the completion variable to turn inline suggestions off; the toggle then doesn't appear. In both cases the client asks `/api/health` rather than offering a button that can only fail.
+
+GitHub needs no configuration — each user connects their own token from inside the app.
 
 The client can optionally override `VITE_API_URL` and `VITE_WS_URL` (in `client/.env`); the localhost defaults work out of the box.
 
@@ -243,16 +354,21 @@ lumen/
 │  └─ src/
 │     ├─ index.ts          HTTP server + WebSocket upgrade
 │     ├─ auth.ts           JWT register / login / me
-│     ├─ projects.ts       Project CRUD + SSE build endpoint
+│     ├─ projects.ts       Project CRUD + SSE build endpoint + completion endpoint
 │     ├─ ai.ts             Pluggable streaming providers (free) + sketch/screenshot prompts
 │     ├─ vision.ts         Image validation + which model can see
+│     ├─ completion.ts     Ghost-text prompt + answer cleanup (pure, tested)
+│     ├─ github.ts         Account, repo link, and the Git Data API commit
+│     ├─ crypto.ts         AES-256-GCM seal/open for the stored GitHub token
+│     ├─ ratelimit.ts      In-memory window limiter (completion endpoint)
 │     └─ collab.ts         Hocuspocus auth + DB persistence
 └─ client/                 React + Vite + CodeMirror
    └─ src/
       ├─ Editor.tsx        The collaborative room + build flow
       ├─ vision.ts         Scale · flatten · encode an attached image
       ├─ speech.ts         Dictation state machine + chunked speech output
-      └─ components/        TopBar · Conversation · Composer · SketchPad · PreviewPane · CodeEditor · Cursors
+      ├─ ghost.ts          CodeMirror inline-completion extension
+      └─ components/        TopBar · Conversation · Composer · SketchPad · PreviewPane · CodeEditor · Cursors · GitHubDialog
 ```
 
 ## Security notes
@@ -261,6 +377,9 @@ lumen/
 - AI provider keys are server-side only.
 - Attached images are validated on the server before they reach a provider: PNG/JPEG/WebP only, checked against the file's **magic bytes** rather than its declared type, and capped at 4 MB. SVG is refused outright — it is a document that can carry script, not a picture.
 - Passwords are bcrypt-hashed; sessions are stateless JWTs.
+- **GitHub tokens are encrypted at rest** with AES-256-GCM under a key derived from `JWT_SECRET` via scrypt. They are never returned to the browser, never logged, and are decrypted only to make a single request. A value that fails its authentication tag — a token written under a different `JWT_SECRET`, or a row edited by hand — is treated as "reconnect", not as a crash. Rotating `JWT_SECRET` therefore invalidates every stored token as well as every session.
+- Repository owner, name, and branch are validated against GitHub's own naming rules before ever reaching a URL path, since those are the only client-supplied strings that become path segments.
+- The completion endpoint is rate limited per user (40/minute) and writes nothing — no version, no cache entry. A suggestion the user hasn't accepted is not a change to the project.
 - WebSocket connections are authenticated against the JWT **and** project membership before any document is shared.
 - For public deployments, set a strong `JWT_SECRET`, serve over HTTPS/WSS, and consider moving to Postgres.
 

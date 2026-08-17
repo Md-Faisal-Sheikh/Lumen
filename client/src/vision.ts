@@ -173,27 +173,38 @@ const UNAVAILABLE: VisionCapability = {
   reason: "Lumen couldn't reach the server to check whether image builds are available.",
 }
 
-let cached: VisionCapability | null = null
-let inflight: Promise<VisionCapability> | null = null
+let cached: any | null = null
+let inflight: Promise<any> | null = null
 
-/** Memoized on success only — a server that was down when we asked may come back. */
-export function visionCapability(): Promise<VisionCapability> {
+/** One shared /api/health read, memoized on success only — a server that was
+ *  down when we asked may come back. Both capability probes below sit on it, so
+ *  a page load asks once however many features are checking. */
+function health(): Promise<any> {
   if (cached) return Promise.resolve(cached)
   if (!inflight) {
     inflight = fetch(`${API_URL}/api/health`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
-        const v = body?.vision
-        if (v && typeof v.supported === 'boolean') {
-          cached = v as VisionCapability
-          return cached
-        }
-        return UNAVAILABLE
+        cached = body ?? {}
+        return cached
       })
-      .catch(() => UNAVAILABLE)
+      .catch(() => ({}))
       .finally(() => {
         inflight = null
       })
   }
   return inflight
+}
+
+export function visionCapability(): Promise<VisionCapability> {
+  return health().then((body) => {
+    const v = body?.vision
+    return v && typeof v.supported === 'boolean' ? (v as VisionCapability) : UNAVAILABLE
+  })
+}
+
+/** Whether this deployment has a model configured for the editor's ghost text.
+ *  A server that can't complete shouldn't show a toggle for it. */
+export function completionSupported(): Promise<boolean> {
+  return health().then((body) => body?.completion?.supported === true)
 }

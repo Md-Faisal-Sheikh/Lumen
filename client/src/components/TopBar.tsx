@@ -3,7 +3,7 @@ import { useAuth } from '../auth'
 import { useAwareness } from '../yhooks'
 import { type ProjectSummary } from '../api'
 import { toast } from '../toast'
-import { Spark, Share, Play, Plus, SignOut, Volume, VolumeOff, Download } from '../icons'
+import { Spark, Share, Play, Plus, SignOut, Volume, VolumeOff, Download, GitHub, GhostText } from '../icons'
 
 const initials = (name: string) =>
   name
@@ -26,10 +26,14 @@ export function TopBar({
   onRun,
   onExport,
   exporting,
+  onGithub,
   awareness,
   voiceOut,
   onToggleVoice,
   voiceOutSupported,
+  suggestions,
+  onToggleSuggestions,
+  suggestionsSupported,
 }: {
   projects: ProjectSummary[]
   projectId: string
@@ -39,10 +43,15 @@ export function TopBar({
   onRun: () => void
   onExport: () => void
   exporting: boolean
+  onGithub: () => void
   awareness: any
   voiceOut: boolean
   onToggleVoice: () => void
   voiceOutSupported: boolean
+  suggestions: boolean
+  onToggleSuggestions: () => void
+  /** False when the server has no completion model — the toggle is hidden. */
+  suggestionsSupported: boolean
 }) {
   const { user, logout, updateProfile } = useAuth()
   const peers = useAwareness(awareness)
@@ -215,6 +224,29 @@ export function TopBar({
 
       <button className="btn ghost" onClick={onRun}>
         <Play width={14} height={14} /> Run
+      </button>
+      {suggestionsSupported && (
+        <button
+          className={`btn ghost icon ${suggestions ? 'active' : ''}`}
+          onClick={onToggleSuggestions}
+          title={
+            suggestions
+              ? 'Inline suggestions are on — Tab to accept, Alt+\\ to ask. Click to turn off.'
+              : 'Turn on inline suggestions in the editor'
+          }
+          aria-label="Toggle inline code suggestions"
+          aria-pressed={suggestions}
+        >
+          <GhostText width={16} height={16} />
+        </button>
+      )}
+      <button
+        className="btn ghost icon"
+        onClick={onGithub}
+        title="Commit and push this project to GitHub"
+        aria-label="Push this project to GitHub"
+      >
+        <GitHub width={16} height={16} />
       </button>
       <button
         className="btn ghost icon"

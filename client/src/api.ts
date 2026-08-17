@@ -64,6 +64,46 @@ export interface CacheStats {
   hitRate: number
   threshold: number
 }
+export interface GitHubAccount {
+  login: string
+  avatarUrl: string | null
+  /** What GitHub reported for the token. Empty for fine-grained tokens, which
+   *  don't publish their permissions — so an empty list means "unknown", not "none". */
+  scopes: string[]
+  connectedAt: string
+}
+export interface GitHubLink {
+  owner: string
+  repo: string
+  branch: string
+  fullName: string
+  url: string
+  lastCommitSha: string | null
+  lastCommitUrl: string | null
+  lastPushedAt: string | null
+  lastPushedBy: string | null
+}
+export interface GitHubRepo {
+  owner: string
+  repo: string
+  fullName: string
+  private: boolean
+  defaultBranch: string
+  empty: boolean
+  updatedAt: string
+}
+export interface PushResult {
+  commitSha: string
+  commitUrl: string
+  branch: string
+  branchUrl: string
+  fullName: string
+  written: string[]
+  removed: string[]
+  /** The branch already held exactly this workspace; no commit was made. */
+  unchanged: boolean
+  createdBranch: boolean
+}
 export interface ChatSessionSummary {
   id: string
   title: string
@@ -107,6 +147,37 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  // ── Inline completion ──
+  // Takes an AbortSignal rather than returning a cancel handle: the caller is a
+  // CodeMirror plugin that already has one per request, and a superseded
+  // suggestion must actually stop the fetch — the server aborts its own upstream
+  // call when this connection closes.
+  complete: (
+    id: string,
+    body: { file: string; prefix: string; suffix: string },
+    signal?: AbortSignal
+  ) =>
+    req<{ completion: string | null }>(`/api/projects/${id}/complete`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      signal,
+    }),
+
+  // ── GitHub ──
+  githubAccount: () => req<{ account: GitHubAccount | null }>('/api/github/account'),
+  githubConnect: (token: string) =>
+    req<{ account: GitHubAccount }>('/api/github/connect', { method: 'POST', body: JSON.stringify({ token }) }),
+  githubDisconnect: () => req<{ ok: true }>('/api/github/account', { method: 'DELETE' }),
+  githubRepos: () => req<{ repos: GitHubRepo[] }>('/api/github/repos'),
+  githubCreateRepo: (body: { name: string; private: boolean; description?: string }) =>
+    req<{ repo: GitHubRepo }>('/api/github/repos', { method: 'POST', body: JSON.stringify(body) }),
+  githubLink: (projectId: string) => req<{ link: GitHubLink | null }>(`/api/github/link/${projectId}`),
+  githubSetLink: (projectId: string, body: { owner: string; repo: string; branch: string }) =>
+    req<{ link: GitHubLink }>(`/api/github/link/${projectId}`, { method: 'PUT', body: JSON.stringify(body) }),
+  githubUnlink: (projectId: string) => req<{ ok: true }>(`/api/github/link/${projectId}`, { method: 'DELETE' }),
+  githubPush: (projectId: string, body: { files: { path: string; content: string }[]; message?: string }) =>
+    req<{ push: PushResult }>(`/api/github/push/${projectId}`, { method: 'POST', body: JSON.stringify(body) }),
+
   chats: (projectId?: string) =>
     req<{ sessions: ChatSessionSummary[] }>(`/api/chats${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
   saveChat: (projectId: string, messages: any[], title?: string) =>

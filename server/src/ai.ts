@@ -1,4 +1,5 @@
 import { env } from './env'
+import { buildCompletionPrompt, completionModels, completionProvider, COMPLETION_SYSTEM } from './completion'
 import { visionCapability, visionModel, visionModels, type ImageAttachment, type ImageKind } from './vision'
 
 // The system instruction handed to whichever free model is configured.
@@ -137,6 +138,54 @@ Rules:
 
 export type OnDelta = (text: string) => void
 
+/**
+ * Per-request knobs that differ between Lumen's AI paths.
+ *
+ * `maxTokens` exists for inline completion: a build wants room for a whole
+ * project, a completion wants to stop after a line or two, and asking a model
+ * for 8000 tokens when you intend to use 30 is most of the latency.
+ *
+ * `signal` exists for the same reason — a completion is superseded by the next
+ * keystroke, and the request it replaces should stop costing quota the moment
+ * nobody is waiting for it.
+ */
+export interface RunOpts {
+  maxTokens?: number
+  signal?: AbortSignal
+  /**
+   * Candidate models, tried in order, overriding the provider's configured one.
+   * Completion uses this to run on a small fast model while builds keep the good
+   * one; OpenRouter walks the whole list on a retryable failure, and the
+   * providers that don't do fallback take the first name.
+   */
+  models?: string[]
+  /**
+   * Pin the reasoning effort for this call, overriding OPENROUTER_REASONING.
+   * Only completion uses it, and only to ask for none — see below.
+   */
+  reasoning?: string
+  /** Send this call to a specific provider instead of AI_PROVIDER. Completion
+   *  uses it so ghost text can run locally while builds stay remote. */
+  provider?: 'openrouter' | 'gemini' | 'ollama'
+  /** Ollama context window for this call. Smaller means a smaller KV cache,
+   *  which is what lets a model load at all on a machine short of memory. */
+  numCtx?: number
+}
+
+const DEFAULT_MAX_TOKENS = 8000
+
+/**
+ * The `reasoning` field for an OpenRouter request, or nothing.
+ *
+ * Returns undefined when OPENROUTER_REASONING is blank so that the request body
+ * is byte-identical to what it was before this existed — an unset variable must
+ * not change how anybody's builds behave.
+ */
+function reasoningField(): { effort: string } | undefined {
+  const effort = env.OPENROUTER_REASONING.trim().toLowerCase()
+  return effort ? { effort } : undefined
+}
+
 function buildUserContent(prompt: string, currentCode?: string, image?: ImageAttachment): string {
   // With an image attached, the picture is the request and anything typed is a
   // refinement of it — a bare "make it dark" alongside a wireframe must not read
@@ -160,16 +209,17 @@ async function runModel(
   user: string,
   temperature: number,
   onDelta: OnDelta,
-  image?: ImageAttachment
+  image?: ImageAttachment,
+  opts?: RunOpts
 ): Promise<string> {
-  switch (env.AI_PROVIDER) {
+  switch (opts?.provider ?? env.AI_PROVIDER) {
     case 'gemini':
-      return streamGemini(system, user, temperature, onDelta, image)
+      return streamGemini(system, user, temperature, onDelta, image, opts)
     case 'ollama':
-      return streamOllama(system, user, temperature, onDelta, image)
+      return streamOllama(system, user, temperature, onDelta, image, opts)
     case 'openrouter':
     default:
-      return streamOpenRouter(system, user, temperature, onDelta, image)
+      return streamOpenRouter(system, user, temperature, onDelta, image, opts)
   }
 }
 
@@ -216,6 +266,35 @@ export async function runInlineEditModel(
     `The user highlighted ${span} of ${file}. That text is exactly:\n\n${selection}\n\n---\n` +
     `Requested change: ${instruction}`
   return runModel(INLINE_SYSTEM, user, 0.2, () => {})
+}
+
+// Ask for the text that belongs at the caret. Three things separate this from
+// every other call: a hard token cap (a completion that runs long is a
+// completion nobody waited for), near-zero temperature (there is one obviously
+// correct continuation of `for (let i = 0; i` and creativity is not wanted), and
+// an abort signal, because the next keystroke makes this answer worthless.
+export async function runCompletionModel(
+  file: string,
+  prefix: string,
+  suffix: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const models = completionModels()
+  if (models.length === 0) throw new Error('No completion model is configured for this provider.')
+  const user = buildCompletionPrompt(file, prefix, suffix)
+  // Ghost text is capped at no reasoning, so that turning it *up* for complex
+  // builds can't make the editor start deliberating over one line again. Only a
+  // cap, never an introduction: with OPENROUTER_REASONING blank this stays
+  // undefined and the request is unchanged.
+  const reasoning = env.OPENROUTER_REASONING.trim() ? 'none' : undefined
+  return runModel(COMPLETION_SYSTEM, user, 0.1, () => {}, undefined, {
+    maxTokens: 160,
+    signal,
+    models,
+    reasoning,
+    provider: completionProvider(),
+    numCtx: Number(env.OLLAMA_COMPLETION_NUM_CTX) || undefined,
+  })
 }
 
 export function extractSummary(full: string): string | null {
@@ -286,7 +365,8 @@ async function streamOpenRouter(
   user: string,
   temperature: number,
   onDelta: OnDelta,
-  image?: ImageAttachment
+  image?: ImageAttachment,
+  opts?: RunOpts
 ): Promise<string> {
   if (!env.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not set. Add a key from openrouter.ai/keys')
 
@@ -294,7 +374,7 @@ async function streamOpenRouter(
   // until one answers — see visionModels() for why that list exists. Only the
   // opening response is retried: once deltas are flowing the client has already
   // written them into the shared document, and starting over would double them.
-  const candidates = image ? visionModels('openrouter') : [env.OPENROUTER_MODEL]
+  const candidates = opts?.models ?? (image ? visionModels('openrouter') : [env.OPENROUTER_MODEL])
   // OpenAI-compatible multimodal: the user turn becomes an array of parts. The
   // image goes first — the text that follows refers back to it.
   const content = image
@@ -317,11 +397,18 @@ async function streamOpenRouter(
         'HTTP-Referer': 'http://localhost:5173',
         'X-Title': 'Lumen',
       },
+      signal: opts?.signal,
       body: JSON.stringify({
         model,
         stream: true,
         temperature,
-        max_tokens: 8000,
+        max_tokens: opts?.maxTokens ?? DEFAULT_MAX_TOKENS,
+        // A caller may pin this (completion asks for none outright); otherwise it
+        // follows OPENROUTER_REASONING, and is omitted entirely when that is blank.
+        ...(() => {
+          const reasoning = opts?.reasoning === undefined ? reasoningField() : { effort: opts.reasoning }
+          return reasoning ? { reasoning } : {}
+        })(),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content },
@@ -357,10 +444,11 @@ async function streamGemini(
   user: string,
   temperature: number,
   onDelta: OnDelta,
-  image?: ImageAttachment
+  image?: ImageAttachment,
+  opts?: RunOpts
 ): Promise<string> {
   if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is not set. Add a free key from aistudio.google.com/apikey')
-  const model = image ? visionModel('gemini') : env.GEMINI_MODEL
+  const model = opts?.models?.[0] ?? (image ? visionModel('gemini') : env.GEMINI_MODEL)
   const parts: Array<Record<string, unknown>> = image
     ? [{ inline_data: { mime_type: image.mime, data: image.data } }, { text: user }]
     : [{ text: user }]
@@ -369,10 +457,11 @@ async function streamGemini(
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: opts?.signal,
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts }],
-      generationConfig: { temperature, maxOutputTokens: 8192 },
+      generationConfig: { temperature, maxOutputTokens: opts?.maxTokens ?? 8192 },
     }),
   })
   if (!r.ok || !r.body) {
@@ -393,9 +482,13 @@ async function streamOllama(
   user: string,
   temperature: number,
   onDelta: OnDelta,
-  image?: ImageAttachment
+  image?: ImageAttachment,
+  opts?: RunOpts
 ): Promise<string> {
-  const model = image ? visionModel('ollama') : env.OLLAMA_MODEL
+  const model = opts?.models?.[0] ?? (image ? visionModel('ollama') : env.OLLAMA_MODEL)
+  // A caller's context wins (completion asks for a small one); otherwise
+  // OLLAMA_NUM_CTX, and if that is blank, Ollama's own default.
+  const numCtx = opts?.numCtx ?? (Number(env.OLLAMA_NUM_CTX) || 0)
   // Ollama takes images as a sibling array of bare base64 strings on the turn.
   const message = image
     ? { role: 'user', content: user, images: [image.data] }
@@ -404,19 +497,38 @@ async function streamOllama(
   const r = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: opts?.signal,
     body: JSON.stringify({
       model,
       stream: true,
-      options: { temperature },
+      options: {
+        temperature,
+        // Ollama's cap is num_predict; left unset it runs to the model's own limit.
+        ...(opts?.maxTokens ? { num_predict: opts.maxTokens } : {}),
+        // Explicit context beats Ollama's default in both directions: builds need
+        // more than 4096 to avoid losing the end of the app, completions need far
+        // less and save the memory.
+        ...(numCtx ? { num_ctx: numCtx } : {}),
+      },
       messages: [{ role: 'system', content: system }, message],
     }),
   })
   if (!r.ok || !r.body) {
     const detail = await safeText(r)
     // 404 from a local Ollama means the model was never pulled — a fixable thing
-    // to be told, rather than "is Ollama running?" when it plainly is.
-    if (image && r.status === 404) {
+    // to be told, rather than "is Ollama running?" when it plainly is. True for
+    // any model, not just a vision one: the completion default in particular is a
+    // different size from the build default, so one can be present and the other not.
+    if (r.status === 404) {
       throw new Error(`Ollama doesn't have "${model}". Run:  ollama pull ${model}`)
+    }
+    // A model too large for the machine's free memory fails here, and the raw
+    // ggml text ("unable to allocate CPU_REPACK buffer") names the symptom rather
+    // than the cause. On a small machine this is the most likely failure of all.
+    if (/allocate|out of memory|insufficient/i.test(detail)) {
+      throw new Error(
+        `Ollama could not load "${model}" — not enough free memory on this machine. Close some applications, or pull a smaller model (e.g. qwen2.5-coder:1.5b).`
+      )
     }
     throw new Error(`Ollama error ${r.status}: ${detail}. Is Ollama running?`)
   }

@@ -488,6 +488,54 @@ button { font-family: inherit; }
 .auth-toggle { text-align: center; font-size: 13px; color: var(--muted); margin-top: 18px; }
 .auth-toggle button { background: 0; border: 0; cursor: pointer; color: var(--text); font-weight: 600; font-family: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 2px; }
 
+/* ───────────── Inline suggestions (ghost text) ───────────── */
+/* Dimmer than a comment, so it never competes with real code, and italic so the
+   difference survives a reader who can't rely on the colour. `pre-wrap` is what
+   renders a multi-line suggestion as multiple lines instead of one long one. */
+.cm-host .cm-ghost {
+  color: var(--muted-2);
+  font-style: italic;
+  white-space: pre-wrap;
+  opacity: 0.85;
+  /* Not selectable: it isn't text in the document, and dragging across it to
+     copy would silently pick up code the user never accepted. */
+  -webkit-user-select: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ───────────── GitHub ───────────── */
+.sheet.gh { width: min(560px, 100%); }
+.gh-who { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); max-width: 150px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.gh-who img { border-radius: 50%; flex: none; }
+.gh-steps { margin: 0 0 14px; padding-left: 20px; font-size: 12.5px; line-height: 1.75; color: var(--muted); }
+.gh-steps li { margin-bottom: 3px; }
+.gh-steps a { color: var(--cyan); text-decoration: none; }
+.gh-steps a:hover { text-decoration: underline; }
+.gh-steps code, .sh-block p code, .gh-warn code { font-family: var(--font-mono); font-size: 11.5px; color: var(--cyan); background: var(--surface-2); border-radius: 5px; padding: 1px 5px; }
+.gh-steps strong { color: var(--text); font-weight: 600; }
+.gh-warn { margin: 16px 0 0; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid rgba(240, 168, 104, 0.32); background: rgba(240, 168, 104, 0.1); font-size: 12px; line-height: 1.6; color: #f4d0a8; }
+
+/* The repository picker. Capped and scrollable: a hundred repos must not push
+   the create-a-new-one block off the bottom of the dialog. */
+.gh-list { display: flex; flex-direction: column; gap: 4px; max-height: 232px; overflow-y: auto; margin-top: 10px; scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+.gh-repo { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-family: var(--font-body); font-size: 12.5px; cursor: pointer; transition: 0.15s; }
+.gh-repo:hover { background: var(--surface-2); border-color: var(--border-2); }
+.gh-repo svg { color: var(--muted); flex: none; }
+.gh-repo-name { font-family: var(--font-mono); font-size: 12px; min-width: 0; }
+.gh-tag { flex: none; font-style: normal; font-size: 10px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+.gh-repo-branch { margin-left: auto; flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--muted-2); }
+
+/* The linked repository, in the push view. */
+.gh-repo-row { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border-2); background: var(--surface-2); }
+.gh-repo-row svg { color: var(--muted); flex: none; }
+.gh-repo-row a.gh-repo-name { color: var(--cyan); text-decoration: none; }
+.gh-repo-row a.gh-repo-name:hover { text-decoration: underline; }
+.gh-check { display: inline-flex; align-items: center; gap: 8px; margin-top: 11px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.gh-check input { accent-color: var(--violet); width: 15px; height: 15px; cursor: pointer; }
+.sh-meta a { color: var(--cyan); font-family: var(--font-mono); text-decoration: none; }
+.sh-meta a:hover { text-decoration: underline; }
+
 /* ───────────── Responsive ───────────── */
 /* Narrow windows: the explorer and its splitter drop out together so the
    remaining three children (workspace, splitter, chat) fill three tracks. */

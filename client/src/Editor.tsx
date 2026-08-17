@@ -6,6 +6,7 @@ import { useAuth } from './auth'
 import { useYMap, useYMapKeys, useYTextNonEmpty } from './yhooks'
 import { toast } from './toast'
 import { speak, stopSpeaking, speechOutputSupported } from './speech'
+import { completionSupported } from './vision'
 import {
   applyOpsToContent,
   assemblePreview,
@@ -22,17 +23,23 @@ import {
 } from './files'
 import { createZip, downloadBlob } from './zip'
 import { describeTarget, instrumentPreview, type PickedElement } from './picker'
+import type { CompletionRequest } from './ghost'
 import type { Attachment } from './vision'
 import { TopBar } from './components/TopBar'
 import { Conversation } from './components/Conversation'
 import { PreviewPane } from './components/PreviewPane'
 import { FileExplorer } from './components/FileExplorer'
 import { ShareDialog } from './components/ShareDialog'
+import { GitHubDialog } from './components/GitHubDialog'
 
 const uid = () => Math.random().toString(36).slice(2, 10)
 
 // Panel layout: explorer and chat have draggable widths; the workspace flexes.
 const PANELS_KEY = 'lumen_panels'
+// Whether ghost text is on. Remembered per browser: it is a preference about how
+// the editor behaves, not something about the project, so it does not belong in
+// the shared document where it would toggle for everyone in the room.
+const SUGGEST_KEY = 'lumen_suggestions'
 // Number.isFinite (not ||) so a mid-drag width of exactly 0 clamps to the floor
 // instead of snapping back to the default for a frame.
 const finite = (v: unknown, fallback: number) => {
@@ -165,6 +172,12 @@ function Room({
   const [exporting, setExporting] = useState(false)
   const [picking, setPicking] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [githubOpen, setGithubOpen] = useState(false)
+  // Default on: the feature is only discoverable by seeing it happen.
+  const [suggestions, setSuggestions] = useState(() => localStorage.getItem(SUGGEST_KEY) !== 'off')
+  // Whether this deployment has a completion model at all. Starts false so a
+  // slow probe never briefly offers a toggle that then disappears.
+  const [canComplete, setCanComplete] = useState(false)
   // Bumped after every build so the cache stats in the explorer refresh.
   const [cacheTick, setCacheTick] = useState(0)
   const [pickTarget, setPickTarget] = useState<PickedElement | null>(null)
@@ -623,6 +636,53 @@ function Room({
   // in-app iframe and has no business on someone else's public link.
   const publishableHtml = () => assemblePreview(ytext.toString(), filesSnapshot())
 
+  // What a commit contains: the same real files the ZIP export writes, at the
+  // same paths. Deliberately shared with the export rather than assembled
+  // separately — a repository and a downloaded folder disagreeing about what the
+  // project is would be a bug nobody would think to look for.
+  const pushableFiles = () => exportEntries(ytext.toString(), filesSnapshot())
+
+  // Ghost text asks for this on a pause in typing. It stays quiet by design:
+  // failures return null rather than throwing, so a provider hiccup means "no
+  // suggestion" instead of an error card in a chat nobody was talking to. The
+  // abort is passed straight through, which is what lets the server drop its own
+  // upstream call the moment the next keystroke supersedes this one.
+  const completeAt = useCallback(
+    async (req: CompletionRequest): Promise<string | null> => {
+      // Mid-build the file is still arriving; a suggestion would be computed
+      // against half a document.
+      if (ymeta.get('building')) return null
+      try {
+        const { completion } = await api.complete(
+          projectId,
+          { file: req.file, prefix: req.prefix, suffix: req.suffix },
+          req.signal
+        )
+        return completion
+      } catch {
+        return null
+      }
+    },
+    [projectId, ymeta]
+  )
+
+  useEffect(() => {
+    let alive = true
+    completionSupported().then((ok) => alive && setCanComplete(ok))
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const toggleSuggestions = () => {
+    setSuggestions((on) => {
+      const next = !on
+      localStorage.setItem(SUGGEST_KEY, next ? 'on' : 'off')
+      toast(next ? 'Inline suggestions on — Tab to accept' : 'Inline suggestions off')
+      return next
+    })
+  }
+
   const toggleVoice = () => {
     setVoiceOut((on) => {
       if (on) stopSpeaking()
@@ -671,10 +731,14 @@ function Room({
         onRun={runPreview}
         onExport={exportZip}
         exporting={exporting}
+        onGithub={() => setGithubOpen(true)}
         awareness={provider.awareness}
         voiceOut={voiceOut}
         onToggleVoice={toggleVoice}
         voiceOutSupported={speechOutputSupported()}
+        suggestions={suggestions}
+        onToggleSuggestions={toggleSuggestions}
+        suggestionsSupported={canComplete}
       />
       {/* Widths flow through CSS variables (not an inline grid template) so the
           responsive breakpoints in styles.css can still restructure the grid. */}
@@ -713,6 +777,8 @@ function Room({
           awareness={provider.awareness}
           onRun={runPreview}
           onInlineEdit={runInlineEdit}
+          onComplete={completeAt}
+          suggestions={suggestions && canComplete}
           picking={picking}
           onPicking={setPicking}
           onPick={onPick}
@@ -745,6 +811,16 @@ function Room({
           publishableHtml={publishableHtml}
           hasApp={hasIndex}
           onClose={() => setShareOpen(false)}
+        />
+      )}
+      {githubOpen && (
+        <GitHubDialog
+          projectId={projectId}
+          projectName={projectName}
+          isOwner={projects.find((p) => p.id === projectId)?.ownerId === user!.id}
+          files={pushableFiles}
+          hasApp={hasIndex}
+          onClose={() => setGithubOpen(false)}
         />
       )}
     </div>

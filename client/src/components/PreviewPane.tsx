@@ -3,6 +3,7 @@ import type * as Y from 'yjs'
 import { CodeEditor } from './CodeEditor'
 import { Cursors } from './Cursors'
 import { CodeIcon, EyeIcon, FileIcon, Pointer, Refresh, Spark } from '../icons'
+import type { CompletionRequest } from '../ghost'
 import { PICK_CANCELLED, PICK_MESSAGE, PICKED_MESSAGE, type PickedElement } from '../picker'
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
@@ -18,6 +19,8 @@ export function PreviewPane({
   awareness,
   onRun,
   onInlineEdit,
+  onComplete,
+  suggestions,
   picking,
   onPicking,
   onPick,
@@ -32,6 +35,8 @@ export function PreviewPane({
   awareness: any
   onRun: () => void
   onInlineEdit: (file: string, start: number, end: number, instruction: string) => Promise<void>
+  onComplete?: (req: CompletionRequest) => Promise<string | null>
+  suggestions?: boolean
   picking: boolean
   onPicking: (on: boolean) => void
   onPick: (el: PickedElement) => void
@@ -178,7 +183,17 @@ export function PreviewPane({
 
         {/* Code tab — remounts per file so the collab binding follows the selection */}
         <div style={{ position: 'absolute', inset: 0, visibility: tab === 'code' ? 'visible' : 'hidden' }}>
-          <CodeEditor key={activeFile} ytext={activeText} awareness={awareness} path={activeFile} onInlineEdit={onInlineEdit} />
+          <CodeEditor
+            key={activeFile}
+            ytext={activeText}
+            awareness={awareness}
+            path={activeFile}
+            onInlineEdit={onInlineEdit}
+            onComplete={onComplete}
+            // Suggestions are pointless while a build is streaming the file in,
+            // and would be asked for against text that is still arriving.
+            suggestions={suggestions && !building}
+          />
         </div>
 
         {/* Generation overlay */}

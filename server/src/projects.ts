@@ -1,7 +1,9 @@
 import { Router, type Request, type Response } from 'express'
 import { prisma } from './db'
 import { authMiddleware } from './auth'
-import { streamBuild, extractSummary, runEditModel, runInlineEditModel } from './ai'
+import { streamBuild, extractSummary, runEditModel, runInlineEditModel, runCompletionModel } from './ai'
+import { PREFIX_BUDGET, SUFFIX_BUDGET, sanitizeCompletion } from './completion'
+import { createLimiter } from './ratelimit'
 import {
   applyEditsToFiles,
   describeEdits,
@@ -194,6 +196,72 @@ projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
   })
   if (!version) return res.status(404).json({ error: 'Version not found.' })
   res.json({ version })
+})
+
+// ── Inline completion: the ghost text ahead of the cursor. ──
+//
+// Unlike every other AI route here, nobody pressed anything to get here — this
+// fires on a pause in typing. Three consequences shape the endpoint:
+//
+//   · It is rate limited. A held-down key is a burst of requests, and a free-tier
+//     provider answers a burst with 429s that would then break builds and edits
+//     for everyone on the same key. The limit is generous for a person typing and
+//     immovable for a loop.
+//   · It aborts. When the client disconnects — the next keystroke superseded this
+//     request — the upstream call is cancelled rather than left to finish into
+//     nobody's screen, still spending quota.
+//   · It never writes anything. No Version row, no cache entry, no updatedAt
+//     bump: a suggestion the user hasn't accepted is not a change to the project,
+//     and treating it as one would fill the history with keystrokes.
+const completionLimiter = createLimiter({ max: 40, windowMs: 60_000 })
+
+projectsRouter.post('/:id/complete', async (req: Request, res: Response) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const gate = completionLimiter.take(uid(req))
+  if (!gate.ok) {
+    res.setHeader('Retry-After', String(Math.ceil(gate.retryAfterMs / 1000)))
+    return res.status(429).json({ error: 'Too many completion requests — pausing suggestions for a moment.' })
+  }
+
+  const file = normalizePath((req.body?.file ?? '').toString())
+  if (!file) return res.status(400).json({ error: 'That file is not part of this project.' })
+
+  // Trimmed to the same budgets the prompt builder uses, on the side that faces
+  // the caret: the client already sends a window, and this is the backstop that
+  // stops a client sending a 2 MB file as "context".
+  const prefix = (req.body?.prefix ?? '').toString().slice(-PREFIX_BUDGET)
+  const suffix = (req.body?.suffix ?? '').toString().slice(0, SUFFIX_BUDGET)
+  // Nothing before the caret is nothing to continue from. An empty file is a job
+  // for the build prompt, not for ghost text.
+  if (!prefix.trim()) return res.json({ completion: null })
+
+  const ac = new AbortController()
+  // 'close' fires on a client that navigated, typed again, or went away. Guard on
+  // writableEnded so a normal completed response doesn't abort itself.
+  const onClose = () => {
+    if (!res.writableEnded) ac.abort()
+  }
+  req.on('close', onClose)
+
+  try {
+    const raw = await runCompletionModel(file, prefix, suffix, ac.signal)
+    res.json({ completion: sanitizeCompletion(raw, prefix, suffix) })
+  } catch (err: any) {
+    // An abort is the expected ending, not a failure — the client is already gone.
+    if (ac.signal.aborted || err?.name === 'AbortError') {
+      if (!res.writableEnded) res.end()
+      return
+    }
+    // A real provider failure is reported rather than swallowed as "no
+    // suggestion": the client stays silent about it, but a misconfigured server
+    // should be diagnosable from the network tab instead of looking like a model
+    // that never has an idea.
+    res.status(502).json({ error: err?.message || 'The completion did not arrive.' })
+  } finally {
+    req.off('close', onClose)
+  }
 })
 
 // ── The build endpoint: streams generated code back as Server-Sent Events. ──

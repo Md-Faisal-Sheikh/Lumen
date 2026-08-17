@@ -8,6 +8,7 @@ import { css } from '@codemirror/lang-css'
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { yCollab } from 'y-codemirror.next'
+import { inlineCompletion, type CompletionRequest } from '../ghost'
 import { Send, Spark } from '../icons'
 
 // Pick a CodeMirror language by file extension (html covers unknown files too).
@@ -57,12 +58,18 @@ export function CodeEditor({
   awareness,
   path = 'index.html',
   onInlineEdit,
+  onComplete,
+  suggestions = false,
 }: {
   ytext: Y.Text
   awareness: any
   path?: string
   /** Rewrite lines start..end of this file. Rejects if the edit fails, so the prompt can stay open. */
   onInlineEdit?: (file: string, start: number, end: number, instruction: string) => Promise<void>
+  /** Ask for the text that belongs at the caret. Resolve null for no suggestion. */
+  onComplete?: (req: CompletionRequest) => Promise<string | null>
+  /** Whether ghost text is switched on right now. */
+  suggestions?: boolean
 }) {
   const host = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -75,6 +82,17 @@ export function CodeEditor({
   // through a ref rather than closing over a stale prop.
   const editRef = useRef(onInlineEdit)
   editRef.current = onInlineEdit
+
+  // Same reason, and one more: these are read on every completion trigger rather
+  // than captured when the editor mounts, so toggling suggestions off stops them
+  // immediately instead of tearing down and rebuilding the editor — which would
+  // drop the user's scroll position, undo history, and collaborative cursors.
+  const completeRef = useRef(onComplete)
+  completeRef.current = onComplete
+  const suggestRef = useRef(suggestions)
+  suggestRef.current = suggestions
+  const pathRef = useRef(path)
+  pathRef.current = path
 
   // Open the prompt over the selection, snapped out to whole lines.
   const openPrompt = useCallback((view: EditorView) => {
@@ -106,6 +124,13 @@ export function CodeEditor({
         oneDark,
         yCollab(ytext, awareness),
         targetField,
+        // Ghost text. Mounted unconditionally and gated on the ref above, so the
+        // toggle never remounts the editor.
+        inlineCompletion({
+          enabled: () => suggestRef.current && !!completeRef.current,
+          file: () => pathRef.current,
+          fetch: (req) => completeRef.current?.(req) ?? Promise.resolve(null),
+        }),
         // Highest precedence: the browser and CodeMirror both want Mod-k.
         Prec.highest(keymap.of([{ key: 'Mod-k', preventDefault: true, run: openPrompt }])),
         EditorView.theme({

@@ -20,6 +20,45 @@ model User {
   memberships   ProjectMember[]
   ownedProjects Project[]       @relation("owner")
   chatSessions  ChatSession[]
+  github        GitHubAccount?
+}
+
+// A user's connected GitHub account. The token is a personal access token the
+// user pasted in — stored AES-256-GCM encrypted (see crypto.ts), never returned
+// to the browser, and only ever decrypted server-side to make a request as them.
+// One per user: the connection belongs to the person, while the repo it pushes
+// to belongs to the project (GitHubLink below).
+model GitHubAccount {
+  userId      String   @id
+  login       String // the GitHub username, shown in the UI
+  avatarUrl   String?
+  scopes      String // scopes GitHub reported for the token ("" for fine-grained)
+  tokenCipher String // iv:tag:ciphertext, base64 — never leaves the server
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// The repository a project pushes to. Set by the owner, used by whoever presses
+// Push with their own connected account.
+//
+// `pushedPaths` is the file list of our last push. Without it a file deleted in
+// Lumen would live on in the repo forever: we commit with `base_tree` so that
+// files Lumen never wrote (a README, a LICENSE, a workflow) are never touched,
+// which also means nothing is removed unless we ask for it explicitly. Knowing
+// what we put there last time is what lets us ask.
+model GitHubLink {
+  projectId    String   @id
+  owner        String // repo owner login
+  repo         String // repo name
+  branch       String   @default("main")
+  pushedPaths  String   @default("[]") // JSON array of paths written by our last push
+  lastCommitSha String?
+  lastPushedAt DateTime?
+  lastPushedBy String? // display name, so the room can see who pushed
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 }
 
 model Project {
@@ -34,6 +73,7 @@ model Project {
   doc       Doc?
   chats     ChatSession[]
   publication Publication?
+  github    GitHubLink?
 }
 
 // A project published to a public link. The HTML is a snapshot taken when the

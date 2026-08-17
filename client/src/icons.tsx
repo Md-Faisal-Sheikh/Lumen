@@ -190,6 +190,31 @@ export const Undo = (p: SVGProps<SVGSVGElement>) => (
     <path d="M8 5 4 9l4 4" />
   </svg>
 )
+/** The GitHub mark. Filled rather than stroked — the Octocat only reads at
+ *  16px as a solid shape, so this one ignores the shared stroke defaults. */
+export const GitHub = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)} strokeWidth={0}>
+    <path
+      fill="currentColor"
+      d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.88 1.51 2.31 1.07 2.87.82.09-.64.35-1.07.63-1.32-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.34 4.7-4.57 4.95.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"
+    />
+  </svg>
+)
+/** The inline-suggestions toggle: a caret with text trailing off after it. */
+export const GhostText = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4 5v14" />
+    <path d="M8 9h5M8 15h3" strokeOpacity="0.45" />
+    <path d="M16 9h4M15 15h5" strokeOpacity="0.45" />
+  </svg>
+)
+/** A commit: a node on a line. Used on the push button. */
+export const CommitIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M3 12h5.8M15.2 12H21" />
+  </svg>
+)
 /** The composer button that opens the sketch pad: a pencil over a board. */
 export const SketchIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>
