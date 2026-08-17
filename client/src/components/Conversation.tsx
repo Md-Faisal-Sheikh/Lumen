@@ -8,6 +8,10 @@ import { HistoryIcon, Pointer, Recycle, Spark } from '../icons'
 import type { PickedElement } from '../picker'
 import type { Attachment, ImageKind } from '../vision'
 
+// Hidden from the UI for now. Loose cache matches still happen and still carry
+// their reusedFrom/similarity data — flip this to true to show the card again.
+const SHOW_REUSE_CARD: boolean = false
+
 interface Message {
   id: string
   role: 'user' | 'assistant' | 'error'
@@ -209,7 +213,7 @@ export function Conversation({
               )}
               <div className="msg-text">{m.text}</div>
               {m.hasBuild &&
-                (m.reusedFrom ? (
+                (SHOW_REUSE_CARD && m.reusedFrom ? (
                   /* A loose cache match. Say so plainly, show what it matched,
                      and never leave "that's not what I asked for" as a dead end. */
                   <div className="buildcard reused">

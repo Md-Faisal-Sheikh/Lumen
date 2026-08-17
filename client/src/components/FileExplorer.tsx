@@ -3,6 +3,10 @@ import { buildTree, INDEX_FILE, type TreeNode } from '../files'
 import { api, type CacheStats } from '../api'
 import { Chevron, FileIcon, FilePlus, FolderIcon, FolderOpenIcon, Pencil, Recycle, Trash } from '../icons'
 
+// Hidden from the UI for now. The stats endpoint and the cache behind it are
+// untouched — flip this to true to bring the footer line back.
+const SHOW_BUILD_LIBRARY: boolean = false
+
 // How much work the shared build library is actually saving. Refetched after
 // every build, so the number is the live one rather than a claim in a README.
 function BuildLibrary({ refreshKey }: { refreshKey: number }) {
@@ -184,7 +188,7 @@ export function FileExplorer({
           <div className="exp-empty">No files yet — describe your app in the chat and Lumen will create them here.</div>
         )}
       </div>
-      <BuildLibrary refreshKey={cacheTick} />
+      {SHOW_BUILD_LIBRARY && <BuildLibrary refreshKey={cacheTick} />}
     </aside>
   )
 }
