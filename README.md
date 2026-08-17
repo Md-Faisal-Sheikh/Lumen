@@ -183,7 +183,7 @@ Three things about an *unasked-for* feature shape the rest of it:
 
 - **Only the person typing triggers a request.** During a build the document changes every 90ms, and a collaborator's edits arrive constantly. Chasing either would fire a model call per chunk and suggest into a file nobody is looking at, so the trigger distinguishes local typing from every other way text can appear — and an accepted suggestion is marked so that pressing Tab doesn't immediately request the next one.
 - **A failure is silence.** There is nothing a user can do about a completion that didn't arrive, so nothing is reported: no toast, no inline error. Suggestions simply stop appearing. The one exception is the server, which returns a real error status so a misconfigured deployment is diagnosable from the network tab instead of looking like a model that never has an idea.
-- **It is rate limited** (40/minute/user) and **superseded requests are aborted**. A held-down key is otherwise a burst of calls, and a free-tier provider answers a burst with 429s that then break builds and edits for everyone sharing the key. When the next keystroke arrives, the browser drops the request and the server aborts its own upstream call rather than finishing into nobody's screen.
+- **Superseded requests are aborted.** When the next keystroke arrives, the browser drops the request and the server aborts its own upstream call rather than finishing into nobody's screen. Together with the debounce this is what keeps a held-down key from becoming a burst of concurrent calls — each keystroke cancels the one before it, so there is one live request at a time regardless of typing speed. There is no request-count limit; if you deploy publicly on a shared provider key, that is the point at which to add one.
 
 **It runs on its own model, and that is not a detail.** Asked to finish `const sorted = items.`, the default build model — a reasoning model — replied *"The user wants to sort the items array in ascending order. The prefix shows…"* for three paragraphs and hit the token cap before writing any code. A completion has about a second to be useful, so it gets a small instruct model of its own (`OPENROUTER_COMPLETION_MODEL`) and builds keep the good one. This is the same split, for a different reason, as the separate vision model above. A `looksLikeProse` guard catches the reasoning case anyway if someone points the variable at a thinking model.
 
@@ -360,7 +360,6 @@ lumen/
 │     ├─ completion.ts     Ghost-text prompt + answer cleanup (pure, tested)
 │     ├─ github.ts         Account, repo link, and the Git Data API commit
 │     ├─ crypto.ts         AES-256-GCM seal/open for the stored GitHub token
-│     ├─ ratelimit.ts      In-memory window limiter (completion endpoint)
 │     └─ collab.ts         Hocuspocus auth + DB persistence
 └─ client/                 React + Vite + CodeMirror
    └─ src/
@@ -379,7 +378,7 @@ lumen/
 - Passwords are bcrypt-hashed; sessions are stateless JWTs.
 - **GitHub tokens are encrypted at rest** with AES-256-GCM under a key derived from `JWT_SECRET` via scrypt. They are never returned to the browser, never logged, and are decrypted only to make a single request. A value that fails its authentication tag — a token written under a different `JWT_SECRET`, or a row edited by hand — is treated as "reconnect", not as a crash. Rotating `JWT_SECRET` therefore invalidates every stored token as well as every session.
 - Repository owner, name, and branch are validated against GitHub's own naming rules before ever reaching a URL path, since those are the only client-supplied strings that become path segments.
-- The completion endpoint is rate limited per user (40/minute) and writes nothing — no version, no cache entry. A suggestion the user hasn't accepted is not a change to the project.
+- The completion endpoint writes nothing — no version, no cache entry. A suggestion the user hasn't accepted is not a change to the project.
 - WebSocket connections are authenticated against the JWT **and** project membership before any document is shared.
 - For public deployments, set a strong `JWT_SECRET`, serve over HTTPS/WSS, and consider moving to Postgres.
 

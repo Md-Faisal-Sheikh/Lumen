@@ -3,7 +3,6 @@ import { prisma } from './db'
 import { authMiddleware } from './auth'
 import { streamBuild, extractSummary, runEditModel, runInlineEditModel, runCompletionModel } from './ai'
 import { PREFIX_BUDGET, SUFFIX_BUDGET, sanitizeCompletion } from './completion'
-import { createLimiter } from './ratelimit'
 import {
   applyEditsToFiles,
   describeEdits,
@@ -201,29 +200,24 @@ projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
 // ── Inline completion: the ghost text ahead of the cursor. ──
 //
 // Unlike every other AI route here, nobody pressed anything to get here — this
-// fires on a pause in typing. Three consequences shape the endpoint:
+// fires on a pause in typing. Two consequences shape the endpoint:
 //
-//   · It is rate limited. A held-down key is a burst of requests, and a free-tier
-//     provider answers a burst with 429s that would then break builds and edits
-//     for everyone on the same key. The limit is generous for a person typing and
-//     immovable for a loop.
 //   · It aborts. When the client disconnects — the next keystroke superseded this
 //     request — the upstream call is cancelled rather than left to finish into
-//     nobody's screen, still spending quota.
+//     nobody's screen, still spending quota. This is what keeps a fast typist from
+//     becoming a burst of concurrent calls: each keystroke kills the one before it,
+//     so a held-down key produces one live request, not one per pause.
 //   · It never writes anything. No Version row, no cache entry, no updatedAt
 //     bump: a suggestion the user hasn't accepted is not a change to the project,
 //     and treating it as one would fill the history with keystrokes.
-const completionLimiter = createLimiter({ max: 40, windowMs: 60_000 })
+//
+// There is deliberately no request-count limit. The debounce in the editor and the
+// abort above already shape the traffic, and a local model has no quota to protect;
+// a public deployment sharing one provider key is where a limiter earns its place.
 
 projectsRouter.post('/:id/complete', async (req: Request, res: Response) => {
   const m = await membership(req.params.id, uid(req))
   if (!m) return res.status(403).json({ error: "You don't have access to this project." })
-
-  const gate = completionLimiter.take(uid(req))
-  if (!gate.ok) {
-    res.setHeader('Retry-After', String(Math.ceil(gate.retryAfterMs / 1000)))
-    return res.status(429).json({ error: 'Too many completion requests — pausing suggestions for a moment.' })
-  }
 
   const file = normalizePath((req.body?.file ?? '').toString())
   if (!file) return res.status(400).json({ error: 'That file is not part of this project.' })
