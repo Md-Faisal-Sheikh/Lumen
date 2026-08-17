@@ -20,6 +20,14 @@ import { lookupBuild, storeBuild } from './cache'
 import { parseImage, visionCapability, type ImageAttachment } from './vision'
 import { asRuntime, runtimeLabel, type Runtime } from './runtime'
 import { copyDocInto, freshForkState, readLiveDoc, seedForkVersion } from './fork'
+import {
+  createProjectMemory,
+  deleteProjectMemory,
+  formatMemoriesForAI,
+  listProjectMemories,
+  retrieveRelevantMemories,
+  updateProjectMemory,
+} from './memory'
 
 export const projectsRouter = Router()
 
@@ -320,6 +328,93 @@ projectsRouter.delete('/:id/publish', async (req, res) => {
   res.json({ ok: true })
 })
 
+// ── Project Memory ─────────────────────────────────────────────────────────
+
+// List the active memories associated with this project.
+projectsRouter.get('/:id/memory', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const memories = await listProjectMemories(req.params.id)
+
+  res.json({
+    memories,
+  })
+})
+
+// Add a project memory manually.
+projectsRouter.post('/:id/memory', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const content = (req.body?.content ?? '').toString().trim()
+  if (!content) {
+    return res.status(400).json({ error: 'Memory content cannot be empty.' })
+  }
+
+  try {
+    const memory = await createProjectMemory(req.params.id, {
+      type: req.body?.type,
+      content,
+      importance: req.body?.importance,
+      confidence: req.body?.confidence,
+    })
+
+    res.status(201).json({ memory })
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'Could not create memory.',
+    })
+  }
+})
+
+// Update a project memory.
+projectsRouter.patch('/:id/memory/:memoryId', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  try {
+    const memory = await updateProjectMemory(
+      req.params.id,
+      req.params.memoryId,
+      {
+        type: req.body?.type,
+        content: req.body?.content,
+        importance: req.body?.importance,
+        confidence: req.body?.confidence,
+        status: req.body?.status,
+      },
+    )
+
+    if (!memory) {
+      return res.status(404).json({ error: 'Memory not found.' })
+    }
+
+    res.json({ memory })
+  } catch (err: any) {
+    res.status(400).json({
+      error: err?.message || 'Could not update memory.',
+    })
+  }
+})
+
+// Delete a project memory.
+projectsRouter.delete('/:id/memory/:memoryId', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const deleted = await deleteProjectMemory(
+    req.params.id,
+    req.params.memoryId,
+  )
+
+  if (!deleted) {
+    return res.status(404).json({ error: 'Memory not found.' })
+  }
+
+  res.json({ ok: true })
+})
+
 // ── Version history (checkpoints) ───────────────────────────────────
 //
 // Every successful build, line edit and inline edit already wrote a Version row.
@@ -474,7 +569,9 @@ projectsRouter.post('/:id/complete', async (req: Request, res: Response) => {
 // ── The build endpoint: streams generated code back as Server-Sent Events. ──
 projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const m = await membership(req.params.id, uid(req))
-  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+  if (!m) {
+    return res.status(403).json({ error: "You don't have access to this project." })
+  }
 
   // The runtime is read from the project, never from the request. It decides
   // which system prompt runs and which cache partition is consulted, so letting
@@ -522,9 +619,16 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
 
-  const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  const send = (obj: unknown) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`)
+  }
 
   try {
+    // Standing facts about this project, retrieved before anything else because
+    // they decide whether the shared cache may be consulted at all.
+    const relevantMemories = await retrieveRelevantMemories(req.params.id, prompt, 8)
+    const memoryContext = formatMemoriesForAI(relevantMemories)
+
     // Fresh build (no existing code to modify): if anyone has already generated
     // this idea — the same words, or close enough — serve it straight from the
     // database with no AI call. A loose match reports what it reused so the
@@ -535,7 +639,13 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
     // "build this" over completely different wireframes, so a text match would
     // hand one of them the other's app. Nor is the result stored, which would
     // poison that key for every text build that follows.
-    if (!currentCode && !noCache && !image) {
+    //
+    // Project memory disqualifies a build from the cache for exactly the same
+    // reason. The key is prompt text, but memory is per-project: "add a login
+    // page" means something different in a project whose memory says it uses
+    // sessions than in one that says tokens. Reading the cache here would serve
+    // another project's answer to a question this project asked differently.
+    if (!currentCode && !noCache && !image && !memoryContext) {
       const hit = await lookupBuild(prompt, runtime)
       if (hit) {
         for (let i = 0; i < hit.output.length; i += 4096) send({ delta: hit.output.slice(i, i + 4096) })
@@ -552,16 +662,20 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
       }
     }
 
-    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }), image, runtime)
+    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }), image, runtime, memoryContext)
     const summary = extractSummary(full)
 
     // Persist a version snapshot and bump the project's updatedAt.
     await prisma.version.create({ data: { projectId: req.params.id, prompt: label, html: full } })
     await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
 
+
     // Save fresh builds into the shared cache: the next person who asks for
     // this — in these words or near enough — gets it from the database.
-    if (!currentCode && !image) await storeBuild(prompt, full, summary, runtime)
+    // A memory-informed build is deliberately not stored: it answers this
+    // project's question, and writing it under the bare prompt key would hand
+    // it to every project that later types the same words.
+    if (!currentCode && !image && !memoryContext) await storeBuild(prompt, full, summary, runtime)
 
     send({ done: true, summary })
   } catch (err: any) {

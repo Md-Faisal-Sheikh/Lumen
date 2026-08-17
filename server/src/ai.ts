@@ -239,7 +239,12 @@ function reasoningField(): { effort: string } | undefined {
   return effort ? { effort } : undefined
 }
 
-function buildUserContent(prompt: string, currentCode?: string, image?: ImageAttachment): string {
+function buildUserContent(
+  prompt: string,
+  currentCode?: string,
+  image?: ImageAttachment,
+  context?: string
+): string {
   // With an image attached, the picture is the request and anything typed is a
   // refinement of it — a bare "make it dark" alongside a wireframe must not read
   // as the whole brief.
@@ -249,10 +254,27 @@ function buildUserContent(prompt: string, currentCode?: string, image?: ImageAtt
       : imageLead(image.kind)
     : prompt
 
-  if (currentCode && currentCode.trim()) {
-    return `Current project files:\n\n${currentCode}\n\n---\nRequested change: ${ask}`
+  const sections: string[] = []
+
+  // Memory before code: it is standing context the model should read *before*
+  // the files it is about to change, not a footnote appended after them.
+  if (context?.trim()) {
+    sections.push(
+      `Relevant project memory (use as reference when making the requested change):\n\n${context.trim()}`
+    )
   }
-  return ask
+
+  if (currentCode && currentCode.trim()) {
+    sections.push(`Current project files:\n\n${currentCode}`)
+  }
+
+  // With no code and no memory to frame it, the ask *is* the whole message.
+  // Labelling it "Requested change" would make a first build — where there is
+  // nothing to change yet — read as an edit against an empty project.
+  if (!sections.length) return ask
+
+  sections.push(`Requested change: ${ask}`)
+  return sections.join('\n\n---\n\n')
 }
 
 // Dispatch one generation to whichever provider is configured. An image, when
@@ -281,7 +303,8 @@ export async function streamBuild(
   currentCode: string | undefined,
   onDelta: OnDelta,
   image?: ImageAttachment,
-  runtime: Runtime = 'web'
+  runtime: Runtime = 'web',
+  context?: string
 ): Promise<string> {
   if (image) {
     // The route checks this before opening the SSE stream so the user gets a
@@ -298,7 +321,7 @@ export async function streamBuild(
   const system = image ? `${SYSTEM}\n\n${visionRules(image.kind)}` : base
   // A picture is a specification. Reading it loosely invents layout that isn't
   // there, so image builds run cooler than the 0.6 a written prompt gets.
-  return runModel(system, buildUserContent(prompt, currentCode, image), image ? 0.35 : 0.6, onDelta, image)
+  return runModel(system, buildUserContent(prompt, currentCode, image, context), image ? 0.35 : 0.6, onDelta, image)
 }
 
 // Ask the model for line operations against the numbered workspace. Low temperature:
