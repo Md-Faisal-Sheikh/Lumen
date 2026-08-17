@@ -9,6 +9,7 @@
     "dev": "concurrently -n server,client -c magenta,cyan \"npm --workspace server run dev\" \"npm --workspace client run dev\"",
     "build": "npm --workspace client run build",
     "start": "npm --workspace server run prisma:deploy && cross-env NODE_ENV=production npm --workspace server run start",
+    "test": "npm --workspace server run test",
     "typecheck": "npm --workspace server run typecheck && npm --workspace client run typecheck"
   },
   "devDependencies": {

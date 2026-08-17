@@ -8,7 +8,14 @@ import { WebSocketServer } from 'ws'
 import { env, isProd } from './env'
 import { authRouter } from './auth'
 import { projectsRouter } from './projects'
+import { chatsRouter } from './chats'
+import { publicRouter } from './publish'
+import { cacheRouter } from './cache'
+import { githubRouter } from './github'
+import { discoverRouter } from './discover'
 import { hocuspocus } from './collab'
+import { visionCapability } from './vision'
+import { completionModels, completionProvider, completionSupported } from './completion'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -16,9 +23,32 @@ const app = express()
 app.use(cors({ origin: isProd ? true : env.CLIENT_ORIGIN }))
 app.use(express.json({ limit: '8mb' }))
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, provider: env.AI_PROVIDER }))
+// Health doubles as the capability probe: whether this deployment can build
+// from a picture depends on env, so the client asks rather than assumes — the
+// sketch button simply isn't offered when nothing can look at an image.
+// Completion is reported the same way and for the same reason: whether the
+// editor offers ghost text depends on a model being configured for it, so the
+// client asks instead of showing a toggle that could only ever fail.
+app.get('/api/health', (_req, res) =>
+  res.json({
+    ok: true,
+    provider: env.AI_PROVIDER,
+    vision: visionCapability(),
+    completion: { supported: completionSupported(), model: completionModels()[0] ?? null },
+  })
+)
 app.use('/api/auth', authRouter)
 app.use('/api/projects', projectsRouter)
+app.use('/api/chats', chatsRouter)
+app.use('/api/cache', cacheRouter)
+app.use('/api/github', githubRouter)
+// Templates and the public gallery. Unauthenticated on purpose: a gallery
+// nobody can see without an account is not a gallery. Everything it serves was
+// made public by an explicit decision of its owner — see discover.ts.
+app.use('/api/discover', discoverRouter)
+// Published projects, open to anyone with the link. Mounted ahead of the SPA
+// fallback below so /p/<slug> resolves here rather than loading the editor.
+app.use('/p', publicRouter)
 
 // In production, serve the compiled client from the same origin.
 if (isProd) {
@@ -46,5 +76,9 @@ server.listen(env.PORT, () => {
   console.log(`\n  ✦ Lumen server ready`)
   console.log(`    http   →  http://localhost:${env.PORT}`)
   console.log(`    ws     →  ws://localhost:${env.PORT}`)
-  console.log(`    ai     →  ${env.AI_PROVIDER}\n`)
+  const vision = visionCapability()
+  console.log(`    ai     →  ${env.AI_PROVIDER}`)
+  console.log(`    vision →  ${vision.supported ? vision.model : 'off — ' + vision.reason}`)
+  const ghost = completionModels()[0]
+  console.log(`    ghost  →  ${ghost ? `${ghost} (${completionProvider()})` : 'off — no completion model configured'}\n`)
 })

@@ -79,3 +79,19 @@ authRouter.get('/me', authMiddleware, async (req, res) => {
   if (!user) return res.status(404).json({ error: 'Account not found.' })
   res.json({ user: publicUser(user) })
 })
+
+// Update the signed-in user's profile (display name and/or avatar color).
+authRouter.patch('/me', authMiddleware, async (req, res) => {
+  const parsed = z
+    .object({
+      name: z.string().trim().min(1, 'Enter a display name.').max(60, 'Keep the name under 60 characters.').optional(),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Pick a valid color.').optional(),
+    })
+    .safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check your details.' })
+  if (parsed.data.name === undefined && parsed.data.color === undefined)
+    return res.status(400).json({ error: 'Nothing to update.' })
+
+  const user = await prisma.user.update({ where: { id: (req as any).userId }, data: parsed.data })
+  res.json({ user: publicUser(user) })
+})

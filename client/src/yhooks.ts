@@ -25,6 +25,32 @@ export function useYMap(map: Y.Map<any>): Record<string, any> {
   return value
 }
 
+// Just the keys of a Y.Map, updating only when entries are added/removed/renamed
+// (shallow observe — edits inside nested Y.Text values don't re-render the tree).
+export function useYMapKeys(map: Y.Map<any>): string[] {
+  const [keys, setKeys] = useState<string[]>(() => Array.from(map.keys()))
+  useEffect(() => {
+    const update = () => setKeys(Array.from(map.keys()))
+    map.observe(update)
+    update()
+    return () => map.unobserve(update)
+  }, [map])
+  return keys
+}
+
+// Whether a Y.Text currently has any content (re-renders only on the boolean flip
+// being observed, cheap enough to observe every edit).
+export function useYTextNonEmpty(text: Y.Text): boolean {
+  const [nonEmpty, setNonEmpty] = useState(() => text.length > 0)
+  useEffect(() => {
+    const update = () => setNonEmpty(text.length > 0)
+    text.observe(update)
+    update()
+    return () => text.unobserve(update)
+  }, [text])
+  return nonEmpty
+}
+
 export interface AwarenessPeer {
   id: number
   user?: { name: string; color: string; id: string }

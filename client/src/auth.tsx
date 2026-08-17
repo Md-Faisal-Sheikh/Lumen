@@ -6,6 +6,7 @@ interface AuthState {
   ready: boolean
   login: (email: string, password: string) => Promise<void>
   register: (name: string, email: string, password: string) => Promise<void>
+  updateProfile: (data: { name?: string; color?: string }) => Promise<void>
   logout: () => void
 }
 
@@ -49,12 +50,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(user)
   }
 
+  const updateProfile = async (data: { name?: string; color?: string }) => {
+    const { user } = await api.updateMe(data)
+    setUser(user)
+  }
+
   const logout = () => {
     setToken(null)
     setUser(null)
   }
 
-  return <AuthContext.Provider value={{ user, ready, login, register, logout }}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={{ user, ready, login, register, updateProfile, logout }}>{children}</AuthContext.Provider>
+  )
 }
 
 export function useAuth() {

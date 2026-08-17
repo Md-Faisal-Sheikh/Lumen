@@ -85,3 +85,172 @@ export const VolumeOff = (p: SVGProps<SVGSVGElement>) => (
     <path d="M22 9l-6 6M16 9l6 6" />
   </svg>
 )
+export const Chevron = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M9 6l6 6-6 6" />
+  </svg>
+)
+export const FileIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" />
+    <path d="M14 3v5h5" />
+  </svg>
+)
+export const FolderIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+  </svg>
+)
+export const FolderOpenIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H6.5a2 2 0 0 0-1.9 1.4L3 16V7Z" />
+    <path d="M3 16l1.8-5.2A2 2 0 0 1 6.7 9.5H21l-2.2 7.1a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1.9Z" />
+  </svg>
+)
+export const FilePlus = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" />
+    <path d="M14 3v5h5M12 12v6M9 15h6" />
+  </svg>
+)
+export const Trash = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4 7h16M10 4h4M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12M10 11v6M14 11v6" />
+  </svg>
+)
+export const Pencil = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19l-4 1Z" />
+    <path d="M14.5 6.5l3 3" />
+  </svg>
+)
+export const HistoryIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5" />
+    <path d="M3.5 4v4.5H8M12 8v4.5l3 2" />
+  </svg>
+)
+export const SaveIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" />
+    <path d="M7 3v5h8V3M7 21v-7h10v7" />
+  </svg>
+)
+export const Recycle = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4.8 15.5 3.4 18a2 2 0 0 0 1.7 3H9M19.2 15.5 20.6 18a2 2 0 0 1-1.7 3H10" />
+    <path d="M9.9 5.4 8.5 7.9M14.1 5.4a2 2 0 0 0-3.4 0L8.5 9.3M15.5 7.9 20 15.6" />
+    <path d="M6.6 12.2 3.9 16.9M11 21l2.2-2.4L11 16.2" />
+  </svg>
+)
+export const Globe = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3Z" />
+  </svg>
+)
+export const Pointer = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M5.5 3.2 18 10.4l-5.3 1.4-2.3 5.1-4.9-13.7Z" />
+    <path d="M13.5 13.5 19 19" />
+  </svg>
+)
+export const Download = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M12 3v11M7.5 9.5 12 14l4.5-4.5" />
+    <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+  </svg>
+)
+export const Close = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+)
+export const ArrowLeft = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M19 12H5M11 6l-6 6 6 6" />
+  </svg>
+)
+export const ImageIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <circle cx="8.5" cy="9.5" r="1.6" />
+    <path d="M3.5 17.5 8.8 12.6a2 2 0 0 1 2.7 0l3.2 3M13.8 15.2l2-1.8a2 2 0 0 1 2.7 0l2 1.9" />
+  </svg>
+)
+export const Eraser = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M9 20H5.6a2 2 0 0 1-1.4-3.4l9-9a2 2 0 0 1 2.8 0l3.4 3.4a2 2 0 0 1 0 2.8L13 20H9Z" />
+    <path d="M8.5 12.5 15 19M20 20h-7" />
+  </svg>
+)
+export const Undo = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4 9h10a5 5 0 0 1 0 10h-5" />
+    <path d="M8 5 4 9l4 4" />
+  </svg>
+)
+/** The GitHub mark. Filled rather than stroked — the Octocat only reads at
+ *  16px as a solid shape, so this one ignores the shared stroke defaults. */
+export const GitHub = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)} strokeWidth={0}>
+    <path
+      fill="currentColor"
+      d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.1-1.47-1.1-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.88 1.51 2.31 1.07 2.87.82.09-.64.35-1.07.63-1.32-2.22-.25-4.56-1.11-4.56-4.95 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .83-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.85-2.34 4.7-4.57 4.95.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"
+    />
+  </svg>
+)
+/** The inline-suggestions toggle: a caret with text trailing off after it. */
+export const GhostText = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M4 5v14" />
+    <path d="M8 9h5M8 15h3" strokeOpacity="0.45" />
+    <path d="M16 9h4M15 15h5" strokeOpacity="0.45" />
+  </svg>
+)
+/** A commit: a node on a line. Used on the push button. */
+export const CommitIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M3 12h5.8M15.2 12H21" />
+  </svg>
+)
+/** Discovery: a compass. Opens templates and the public gallery. */
+export const Compass = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m15.2 8.8-1.9 4.5-4.5 1.9 1.9-4.5 4.5-1.9Z" />
+  </svg>
+)
+/** A fork: one commit line branching into two. */
+export const Fork = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="7" cy="5" r="2.2" />
+    <circle cx="17" cy="5" r="2.2" />
+    <circle cx="12" cy="19" r="2.2" />
+    <path d="M7 7.2v2.3a3 3 0 0 0 3 3h4a3 3 0 0 0 3-3V7.2M12 12.5v4.3" />
+  </svg>
+)
+/** A console: a prompt caret and a line, for the Python runtime. */
+export const Terminal = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <path d="m7.5 10 2.5 2-2.5 2M13 14h3.5" />
+  </svg>
+)
+/** Restore: an arrow curving back to a point on a line. */
+export const Restore = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M3.5 8.5A8.5 8.5 0 1 1 3 12" />
+    <path d="M3.5 4v4.5H8" />
+    <circle cx="12" cy="12" r="2.2" />
+  </svg>
+)
+/** The composer button that opens the sketch pad: a pencil over a board. */
+export const SketchIcon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M20 12.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6.5" />
+    <path d="M7.5 8h6M7.5 12h3" />
+    <path d="M14.6 20.4 14 22l1.6-.6 5.1-5.1a1.4 1.4 0 0 0-2-2l-5.1 5.1Z" />
+  </svg>
+)
