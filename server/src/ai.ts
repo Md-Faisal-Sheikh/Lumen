@@ -1,6 +1,7 @@
 import { env } from './env'
 import { buildCompletionPrompt, completionModels, completionProvider, COMPLETION_SYSTEM } from './completion'
 import { visionCapability, visionModel, visionModels, type ImageAttachment, type ImageKind } from './vision'
+import type { Runtime } from './runtime'
 
 // The system instruction handed to whichever free model is configured.
 export const SYSTEM = `You are the build engine for Lumen, a collaborative vibe-coding platform.
@@ -24,6 +25,58 @@ Output format (follow EXACTLY, no markdown, no code fences, no commentary):
    and output the complete contents of EVERY file the project needs (including files you did not change).
 
 Keep it reasonably compact, but complete and working.`
+
+// ── The Python runtime ──────────────────────────────────────────────
+// A project whose runtime is "python" is executed by CPython compiled to
+// WebAssembly (Pyodide) inside the same sandboxed iframe the web preview uses.
+// That changes what "an app" means here, and the prompt has to say so plainly:
+// there is no browser DOM to build against, the output surface is a terminal,
+// and the program has to *end* — a `while True:` with no exit hangs the tab.
+//
+// The marker protocol is deliberately identical to the web prompt's. The client
+// parser, the build cache, the version snapshots, the ZIP writer and the GitHub
+// push all read that one format, so a second runtime is a different instruction
+// about *what to write*, never a different wire format.
+export const PYTHON_SYSTEM = `You are the build engine for Lumen, a collaborative vibe-coding platform.
+Turn the user's request into a small, polished Python program.
+
+Output format (follow EXACTLY, no markdown, no code fences, no commentary):
+1. The VERY FIRST line MUST be an HTML comment exactly of this form:
+   <!-- SUMMARY: one short, friendly sentence describing what you built or changed -->
+2. Then output every file of the project. Each file starts with a marker line of exactly this form,
+   followed immediately by that file's complete contents:
+===== FILE: main.py =====
+3. main.py is the entry point and MUST exist — it is the file that gets run.
+4. Split genuinely separate concerns into their own modules (e.g. game.py, board.py) and import
+   them from main.py with plain "import board" / "from board import Board". Everything sits in one
+   flat directory unless the user asks otherwise, so no packages and no relative imports.
+5. Guard the entry point with "if __name__ == '__main__':" and keep the top level import-safe.
+
+How this program runs — these are hard constraints, not style notes:
+6. It runs as CPython 3 in the browser via Pyodide. The standard library is available, plus any
+   package in the Pyodide distribution (numpy, pandas, matplotlib, sympy, scipy, requests-free
+   pure-Python wheels). There is NO network access, no threading, no subprocess, no tkinter,
+   no pygame, and no local filesystem beyond files this project itself creates.
+7. The user sees a TEXT CONSOLE. print() is the interface. Never assume a GUI, a window, or a DOM.
+8. The program MUST TERMINATE. Never write an unbounded "while True:" loop that waits for input —
+   the whole page freezes. Simulate a fixed number of turns, iterate a bounded range, or run a
+   short scripted demo instead.
+9. input() works but blocks the page on a modal dialog, so use it sparingly and never in a loop.
+   Prefer driving the program with values defined at the top of main.py that are easy to change.
+10. Print something the moment it runs. A program whose output is an empty console reads as broken
+   even when it worked — show the result, a small table, or a few frames of state.
+
+Style:
+11. Idiomatic, readable Python 3: type hints on function signatures, docstrings on anything
+   non-obvious, dataclasses over dicts-of-dicts, f-strings over concatenation.
+12. Make the console output genuinely nice to look at — aligned columns, box-drawing characters,
+   clear section headings. That presentation is this runtime's equivalent of good CSS.
+13. If current project files are provided, MODIFY them to satisfy the request rather than starting
+   over, and output the complete contents of EVERY file the project needs (including unchanged ones).
+
+Keep it reasonably compact, but complete and working.`
+
+const systemFor = (runtime: Runtime) => (runtime === 'python' ? PYTHON_SYSTEM : SYSTEM)
 
 // ── Building from a picture ─────────────────────────────────────────
 // Appended to SYSTEM when an image comes along, so every rule above about the
@@ -227,7 +280,8 @@ export async function streamBuild(
   prompt: string,
   currentCode: string | undefined,
   onDelta: OnDelta,
-  image?: ImageAttachment
+  image?: ImageAttachment,
+  runtime: Runtime = 'web'
 ): Promise<string> {
   if (image) {
     // The route checks this before opening the SSE stream so the user gets a
@@ -236,7 +290,12 @@ export async function streamBuild(
     const cap = visionCapability()
     if (!cap.supported) throw new Error(cap.reason ?? 'This server is not configured to build from an image.')
   }
-  const system = image ? `${SYSTEM}\n\n${visionRules(image.kind)}` : SYSTEM
+  // A sketch or screenshot describes an *interface*, which is a web request by
+  // definition — there is no layout to reproduce in a console. The route refuses
+  // the combination before the stream opens; this keeps the two rule sets from
+  // being concatenated into a contradictory instruction if it ever gets here.
+  const base = systemFor(runtime)
+  const system = image ? `${SYSTEM}\n\n${visionRules(image.kind)}` : base
   // A picture is a specification. Reading it loosely invents layout that isn't
   // there, so image builds run cooler than the 0.6 a written prompt gets.
   return runModel(system, buildUserContent(prompt, currentCode, image), image ? 0.35 : 0.6, onDelta, image)

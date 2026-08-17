@@ -12,6 +12,7 @@ import { chatsRouter } from './chats'
 import { publicRouter } from './publish'
 import { cacheRouter } from './cache'
 import { githubRouter } from './github'
+import { discoverRouter } from './discover'
 import { hocuspocus } from './collab'
 import { visionCapability } from './vision'
 import { completionModels, completionProvider, completionSupported } from './completion'
@@ -41,6 +42,10 @@ app.use('/api/projects', projectsRouter)
 app.use('/api/chats', chatsRouter)
 app.use('/api/cache', cacheRouter)
 app.use('/api/github', githubRouter)
+// Templates and the public gallery. Unauthenticated on purpose: a gallery
+// nobody can see without an account is not a gallery. Everything it serves was
+// made public by an explicit decision of its owner — see discover.ts.
+app.use('/api/discover', discoverRouter)
 // Published projects, open to anyone with the link. Mounted ahead of the SPA
 // fallback below so /p/<slug> resolves here rather than loading the editor.
 app.use('/p', publicRouter)

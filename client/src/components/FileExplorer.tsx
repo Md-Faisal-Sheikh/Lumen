@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { buildTree, INDEX_FILE, type TreeNode } from '../files'
+import { buildTree, type TreeNode } from '../files'
 import { api, type CacheStats } from '../api'
 import { Chevron, FileIcon, FilePlus, FolderIcon, FolderOpenIcon, Pencil, Recycle, Trash } from '../icons'
 
@@ -56,6 +56,7 @@ export function FileExplorer({
   projectName,
   files,
   active,
+  entry,
   onSelect,
   onCreate,
   onRename,
@@ -65,6 +66,8 @@ export function FileExplorer({
   projectName: string
   files: string[]
   active: string
+  /** The file this project's runtime runs — pinned to the top, never deletable. */
+  entry: string
   onSelect: (path: string) => void
   onCreate: (path: string) => void
   onRename: (path: string) => void
@@ -77,7 +80,7 @@ export function FileExplorer({
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const tree = buildTree(files)
+  const tree = buildTree(files, entry)
 
   useEffect(() => {
     if (creating) inputRef.current?.focus()
@@ -114,13 +117,13 @@ export function FileExplorer({
         </div>
       )
     }
-    const isIndex = node.path === INDEX_FILE
+    const isEntry = node.path === entry
     return (
       <div key={node.path} className={`tree-row file ${active === node.path ? 'active' : ''}`} style={indent} onClick={() => onSelect(node.path)}>
         <span className="tw" />
         <FileIcon className={`ti ${extClass(node.name)}`} width={15} height={15} />
         <span className="tname">{node.name}</span>
-        {!isIndex && (
+        {!isEntry && (
           <span className="row-actions">
             <button
               className="ract"
@@ -197,5 +200,6 @@ function extClass(name: string): string {
   if (/\.css$/i.test(name)) return 'css'
   if (/\.(m?js|jsx|ts|tsx)$/i.test(name)) return 'js'
   if (/\.html?$/i.test(name)) return 'html'
+  if (/\.pyw?$/i.test(name)) return 'py'
   return ''
 }

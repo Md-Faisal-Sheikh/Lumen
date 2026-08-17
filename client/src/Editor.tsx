@@ -13,7 +13,6 @@ import {
   createBuildWriter,
   exportEntries,
   exportFileName,
-  INDEX_FILE,
   isLineEditPrompt,
   normalizePath,
   replaceTextRanged,
@@ -21,6 +20,8 @@ import {
   starterContent,
   type LineEdit,
 } from './files'
+import { asRuntime, entryFile, runtimeLabel, type Runtime } from './runtime'
+import { buildPythonRunner } from './python'
 import { createZip, downloadBlob } from './zip'
 import { describeTarget, instrumentPreview, type PickedElement } from './picker'
 import type { CompletionRequest } from './ghost'
@@ -31,6 +32,8 @@ import { PreviewPane } from './components/PreviewPane'
 import { FileExplorer } from './components/FileExplorer'
 import { ShareDialog } from './components/ShareDialog'
 import { GitHubDialog } from './components/GitHubDialog'
+import { HistoryDialog } from './components/HistoryDialog'
+import { DiscoverDialog } from './components/DiscoverDialog'
 
 const uid = () => Math.random().toString(36).slice(2, 10)
 
@@ -95,12 +98,34 @@ export function Editor() {
   const newProject = async () => {
     const name = window.prompt('Name your new project', 'Untitled project')
     if (name === null) return
+    // The runtime is fixed at creation, so it has to be asked for here. A
+    // confirm is a blunt instrument for a two-way choice, but it beats the
+    // alternative — letting someone build half a project before discovering it
+    // can't run Python, at which point the entry file is already wrong.
+    const wantsPython = window.confirm(
+      'Which runtime should this project use?\n\n' +
+        'OK      →  Python — real CPython in the browser, output to a console\n' +
+        'Cancel  →  Web — HTML, CSS and JavaScript in a live preview\n\n' +
+        "This can't be changed later."
+    )
+    const runtime: Runtime = wantsPython ? 'python' : 'web'
     try {
-      const { project } = await api.createProject(name.trim() || 'Untitled project')
+      const { project } = await api.createProject(name.trim() || 'Untitled project', runtime)
       await refresh(project.id)
-      toast('Project created')
+      toast(`Project created · ${runtimeLabel(runtime)}`)
     } catch (e: any) {
       toast(e?.message || 'Could not create project.')
+    }
+  }
+
+  // A fork lands as a brand-new project owned by whoever forked it, so the
+  // project list has to be refetched before switching — it isn't in `projects`
+  // yet, and Room would mount against an id the picker doesn't know.
+  const openForked = async (id: string) => {
+    try {
+      await refresh(id)
+    } catch (e: any) {
+      toast(e?.message || 'Forked, but the project list could not be refreshed.')
     }
   }
 
@@ -123,6 +148,7 @@ export function Editor() {
       projects={projects}
       onSwitch={switchProject}
       onNew={newProject}
+      onForked={openForked}
     />
   )
 }
@@ -133,13 +159,24 @@ function Room({
   projects,
   onSwitch,
   onNew,
+  onForked,
 }: {
   projectId: string
   projects: ProjectSummary[]
   onSwitch: (id: string) => void
   onNew: () => void
+  onForked: (id: string) => void
 }) {
   const { user } = useAuth()
+
+  const project = projects.find((p) => p.id === projectId)
+  // Which engine runs this project, and therefore which file is the one that
+  // runs. Everything below treats `entry` as an ordinary path — that is what
+  // keeps the build stream, the version snapshots, the export and the GitHub
+  // push from needing to know a runtime exists at all.
+  const runtime: Runtime = asRuntime(project?.runtime)
+  const entry = entryFile(runtime)
+  const isPython = runtime === 'python'
 
   // One Yjs document + provider per project (remounted via key on switch).
   const ydoc = useMemo(() => new Y.Doc(), [projectId])
@@ -148,7 +185,7 @@ function Room({
     [projectId, ydoc]
   )
 
-  const ytext = useMemo(() => ydoc.getText('code'), [ydoc]) // index.html — the build target
+  const ytext = useMemo(() => ydoc.getText('code'), [ydoc]) // the entry file — the build target
   const yfiles = useMemo(() => ydoc.getMap<Y.Text>('files'), [ydoc]) // extra files by path
   const ychat = useMemo(() => ydoc.getArray<Y.Map<any>>('chat'), [ydoc])
   const ymeta = useMemo(() => ydoc.getMap<any>('meta'), [ydoc])
@@ -157,14 +194,14 @@ function Room({
   const building = !!meta.building
 
   const fileKeys = useYMapKeys(yfiles)
-  // index.html only shows in the explorer once something has been generated
+  // The entry file only shows in the explorer once something has been generated
   // (or a collaborator created other files) — a fresh project starts empty.
   const hasIndex = useYTextNonEmpty(ytext)
   const files = useMemo(() => {
-    const rest = fileKeys.filter((k) => k !== INDEX_FILE)
-    return hasIndex || rest.length > 0 ? [INDEX_FILE, ...rest] : rest
-  }, [fileKeys, hasIndex])
-  const [activeFile, setActiveFile] = useState(INDEX_FILE)
+    const rest = fileKeys.filter((k) => k !== entry)
+    return hasIndex || rest.length > 0 ? [entry, ...rest] : rest
+  }, [fileKeys, hasIndex, entry])
+  const [activeFile, setActiveFile] = useState(entry)
 
   const [previewCode, setPreviewCode] = useState('')
   const [tab, setTab] = useState<'preview' | 'code'>('preview')
@@ -173,6 +210,18 @@ function Room({
   const [picking, setPicking] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [githubOpen, setGithubOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [discoverOpen, setDiscoverOpen] = useState(false)
+  // Bumped on every explicit Run. The preview iframe is keyed on it, which is
+  // what restarts a Python interpreter that has already finished — and the only
+  // way out of one that hasn't.
+  const [runNonce, setRunNonce] = useState(0)
+  // Template settings are owner-only and edited in the Share dialog; kept here
+  // so the dialog reflects a change immediately rather than after a refetch.
+  const [template, setTemplate] = useState({
+    isTemplate: !!project?.isTemplate,
+    description: project?.description ?? null,
+  })
   // Default on: the feature is only discoverable by seeing it happen.
   const [suggestions, setSuggestions] = useState(() => localStorage.getItem(SUGGEST_KEY) !== 'off')
   // Whether this deployment has a completion model at all. Starts false so a
@@ -186,25 +235,38 @@ function Room({
   // preview when it lands, but don't yank them off the code tab to show it.
   const stayOnCode = useRef(false)
 
-  // If the file we're editing is deleted by a collaborator, fall back to index.html.
+  // If the file we're editing is deleted by a collaborator, fall back to the entry.
   useEffect(() => {
-    if (activeFile !== INDEX_FILE && !fileKeys.includes(activeFile)) setActiveFile(INDEX_FILE)
-  }, [fileKeys, activeFile])
+    if (activeFile !== entry && !fileKeys.includes(activeFile)) setActiveFile(entry)
+  }, [fileKeys, activeFile, entry])
 
-  const textFor = (path: string): Y.Text => (path === INDEX_FILE ? ytext : yfiles.get(path) ?? ytext)
+  const textFor = (path: string): Y.Text => (path === entry ? ytext : yfiles.get(path) ?? ytext)
 
   const filesSnapshot = (): Record<string, string> => {
     const snap: Record<string, string> = {}
     yfiles.forEach((text, path) => {
-      if (path !== INDEX_FILE) snap[path] = text.toString()
+      if (path !== entry) snap[path] = text.toString()
     })
     return snap
   }
 
-  // The preview document = the workspace inlined into one page, plus the element
-  // picker. Instrumentation lives only in this string — never in the Yjs files,
-  // the version snapshots, or the exported ZIP.
-  const assemble = () => instrumentPreview(assemblePreview(ytext.toString(), filesSnapshot()))
+  /**
+   * The document the preview iframe runs.
+   *
+   * For the web runtime it is the workspace inlined into one page plus the
+   * element picker — instrumentation that lives only in this string, never in
+   * the Yjs files, the version snapshots or the exported ZIP.
+   *
+   * For Python it is a console page that loads Pyodide, writes the project into
+   * the interpreter's filesystem and runs the entry module. Both go into the
+   * same sandboxed iframe with the same flags, so adding a runtime added no new
+   * trust boundary to reason about.
+   */
+  const assemble = () => {
+    const rest = filesSnapshot()
+    if (isPython) return buildPythonRunner({ [entry]: ytext.toString(), ...rest }, entry)
+    return instrumentPreview(assemblePreview(ytext.toString(), rest))
+  }
 
   // Identify ourselves to other people in the room (drives cursors + presence).
   // Re-announces on profile edits, so keep it separate from the teardown below —
@@ -252,17 +314,17 @@ function Room({
   }
 
   // ── File operations (all through Yjs, so the whole room stays in sync). ──
-  // index.html is part of the path universe even while hidden from the explorer.
+  // The entry file is part of the path universe even while hidden from the explorer.
   const collision = (path: string) =>
-    [INDEX_FILE, ...files].find((f) => f !== path && (f.startsWith(path + '/') || path.startsWith(f + '/')))
+    [entry, ...files].find((f) => f !== path && (f.startsWith(path + '/') || path.startsWith(f + '/')))
 
   const createFile = (input: string) => {
     const path = normalizePath(input)
     if (!path) {
-      toast('Use a simple path with an extension, like styles/theme.css')
+      toast(isPython ? 'Use a simple path with an extension, like helpers/board.py' : 'Use a simple path with an extension, like styles/theme.css')
       return
     }
-    if (path === INDEX_FILE || files.includes(path)) {
+    if (path === entry || files.includes(path)) {
       setActiveFile(path)
       setTab('code')
       return
@@ -278,15 +340,15 @@ function Room({
   }
 
   const renameFile = (from: string) => {
-    if (from === INDEX_FILE) return
+    if (from === entry) return
     const input = window.prompt('Rename file', from)
     if (input === null || input.trim() === from) return
     const to = normalizePath(input)
     if (!to) {
-      toast('Use a simple path with an extension, like styles/theme.css')
+      toast(isPython ? 'Use a simple path with an extension, like helpers/board.py' : 'Use a simple path with an extension, like styles/theme.css')
       return
     }
-    if (to === INDEX_FILE || files.includes(to)) {
+    if (to === entry || files.includes(to)) {
       toast('A file with that name already exists.')
       return
     }
@@ -306,10 +368,10 @@ function Room({
   }
 
   const deleteFile = (path: string) => {
-    if (path === INDEX_FILE) return
+    if (path === entry) return
     if (!window.confirm(`Delete ${path} for everyone in the room?`)) return
     yfiles.delete(path)
-    if (activeFile === path) setActiveFile(INDEX_FILE)
+    if (activeFile === path) setActiveFile(entry)
   }
 
   const selectFile = (path: string) => {
@@ -340,7 +402,7 @@ function Room({
     // neither does an image: a picture is never a line edit.
     if (!target && !image && indexNow.trim() && isLineEditPrompt(said)) return runLineEdit(said)
     // Hand the model every current file (marker format) so it can modify the project.
-    const currentCode = indexNow.trim() ? serializeWorkspace(indexNow, filesSnapshot()) : ''
+    const currentCode = indexNow.trim() ? serializeWorkspace(entry, indexNow, filesSnapshot()) : ''
     // What the user typed is what the chat shows; the model gets the element too.
     const request = target ? describeTarget(target, said) : said
     setPickTarget(null)
@@ -364,12 +426,13 @@ function Room({
       ymeta.set('building', { by: user!.name, color: user!.color, at: Date.now() })
       ytext.delete(0, ytext.length)
     })
-    setActiveFile(INDEX_FILE)
+    setActiveFile(entry)
     setTab('code')
 
     const writer = createBuildWriter({
+      runtime,
       reset: (path) => {
-        if (path === INDEX_FILE) {
+        if (path === entry) {
           ytext.delete(0, ytext.length)
           return
         }
@@ -378,7 +441,7 @@ function Room({
         else yfiles.set(path, new Y.Text())
       },
       append: (path, text) => {
-        const t = path === INDEX_FILE ? ytext : yfiles.get(path)
+        const t = path === entry ? ytext : yfiles.get(path)
         t?.insert(t.length, text)
       },
       onFile: (path) => setActiveFile(path), // follow the file being written
@@ -459,7 +522,15 @@ function Room({
       }
       flush(true)
       ydoc.transact(() => writer.end())
-      const reply = summary || "Here's your app, running live in the preview. Tell me what to change."
+      // A build finishing means something different per runtime: the web preview
+      // is already showing the result, while a Python program has only just been
+      // handed to an interpreter that is about to start.
+      if (isPython) setRunNonce((n) => n + 1)
+      const reply =
+        summary ||
+        (isPython
+          ? "Here's your program. It's running in the console — press Run to start it again."
+          : "Here's your app, running live in the preview. Tell me what to change.")
       pushMessage({
         id: uid(),
         role: 'assistant',
@@ -499,7 +570,7 @@ function Room({
   // rebuild, untouched lines stay byte-identical. The building flag drives the
   // same indicator + preview-refresh effect the build flow uses.
   const runLineEdit = async (prompt: string) => {
-    const currentCode = serializeWorkspace(ytext.toString(), filesSnapshot())
+    const currentCode = serializeWorkspace(entry, ytext.toString(), filesSnapshot())
     pushMessage({ id: uid(), role: 'user', authorName: user!.name, color: user!.color, text: prompt, ts: Date.now() })
     ydoc.transact(() => ymeta.set('building', { by: user!.name, color: user!.color, at: Date.now(), mode: 'edit' }))
     try {
@@ -513,13 +584,13 @@ function Room({
       }
       ydoc.transact(() => {
         for (const [file, ops] of byFile) {
-          const target = file === INDEX_FILE ? ytext : yfiles.get(file)
+          const target = file === entry ? ytext : yfiles.get(file)
           if (!target) continue // deleted by a collaborator mid-request
           replaceTextRanged(target, applyOpsToContent(target.toString(), ops))
         }
       })
       const firstFile = edits[0]?.file
-      if (firstFile && (firstFile === INDEX_FILE || yfiles.has(firstFile))) setActiveFile(firstFile)
+      if (firstFile && (firstFile === entry || yfiles.has(firstFile))) setActiveFile(firstFile)
 
       let reply = summary || (detail ? `Updated ${detail}.` : 'Done — lines updated.')
       if (skipped.length > 0) {
@@ -550,7 +621,7 @@ function Room({
       toast('Wait for the current change to finish.')
       throw new Error('Something else is already running.')
     }
-    const currentCode = serializeWorkspace(ytext.toString(), filesSnapshot())
+    const currentCode = serializeWorkspace(entry, ytext.toString(), filesSnapshot())
     const span = start === end ? `line ${start}` : `lines ${start}–${end}`
     stayOnCode.current = true
 
@@ -567,7 +638,7 @@ function Room({
 
     try {
       const { summary, edit, detail } = await api.inlineEdit(projectId, { file, start, end, instruction, currentCode })
-      const text = file === INDEX_FILE ? ytext : yfiles.get(file)
+      const text = file === entry ? ytext : yfiles.get(file)
       if (!text) throw new Error('That file was removed from the project.')
       // Ranged replace: collaborators editing elsewhere in the file keep their
       // cursors, and the untouched lines stay byte-identical.
@@ -598,10 +669,51 @@ function Room({
 
   const runPreview = () => {
     setPreviewCode(assemble())
+    // Bumping the nonce remounts the frame. For the web runtime that's the
+    // reload Run always meant; for Python it starts a fresh interpreter, which
+    // is the only way to re-run a program that has already exited.
+    setRunNonce((n) => n + 1)
     setTab('preview')
   }
 
-  const projectName = projects.find((p) => p.id === projectId)?.name ?? 'Project'
+  /**
+   * Apply a restored checkpoint to the shared document.
+   *
+   * Three things have to be true for this to be a *restore* rather than an
+   * overwrite. It runs in one Yjs transaction, so collaborators see one change
+   * instead of a flurry. It uses a ranged replace on each file, so anyone with a
+   * cursor in an untouched region keeps it. And it deletes files the checkpoint
+   * doesn't have — without that, restoring to a point before a file existed
+   * would leave that file behind, and the "restored" project would be a state
+   * the project was never actually in.
+   */
+  const restoreWorkspace = async (restored: Record<string, string>, label: string) => {
+    const entryContent = restored[entry] ?? ''
+    ydoc.transact(() => {
+      replaceTextRanged(ytext, entryContent)
+      for (const [path, content] of Object.entries(restored)) {
+        if (path === entry) continue
+        const existing = yfiles.get(path)
+        if (existing) replaceTextRanged(existing, content)
+        else yfiles.set(path, new Y.Text(content))
+      }
+      for (const path of [...yfiles.keys()]) {
+        if (path !== entry && !(path in restored)) yfiles.delete(path)
+      }
+    })
+    setActiveFile(entry)
+    setPreviewCode(assemble())
+    setRunNonce((n) => n + 1)
+    setTab('preview')
+    pushMessage({
+      id: uid(),
+      role: 'assistant',
+      text: `Restored the project to “${label}”. The code from before is saved as its own checkpoint, so you can go back.`,
+      ts: Date.now(),
+    })
+  }
+
+  const projectName = project?.name ?? 'Project'
 
   // Download the workspace as a real .zip: every file at its real path, folders
   // intact, no build step — unzip it and open index.html. Packaged in the
@@ -614,7 +726,7 @@ function Room({
       toast('Hold on — Lumen is still writing the files.')
       return
     }
-    const entries = exportEntries(ytext.toString(), filesSnapshot())
+    const entries = exportEntries(entry, ytext.toString(), filesSnapshot())
     if (entries.length === 0) {
       toast('Nothing to export yet — describe an app in the chat first.')
       return
@@ -634,13 +746,26 @@ function Room({
   // What a published page serves: the app assembled exactly as the preview
   // assembles it, minus the element picker — that script exists only for the
   // in-app iframe and has no business on someone else's public link.
-  const publishableHtml = () => assemblePreview(ytext.toString(), filesSnapshot())
+  //
+  // A Python project publishes its console page, which carries the interpreter
+  // loader and the program's own source. That is the honest thing to serve: the
+  // published link runs the program in the reader's browser exactly as it ran in
+  // the author's, with no server executing anything on either side.
+  const publishableHtml = () => {
+    const rest = filesSnapshot()
+    if (isPython) return buildPythonRunner({ [entry]: ytext.toString(), ...rest }, entry)
+    return assemblePreview(ytext.toString(), rest)
+  }
 
   // What a commit contains: the same real files the ZIP export writes, at the
   // same paths. Deliberately shared with the export rather than assembled
   // separately — a repository and a downloaded folder disagreeing about what the
   // project is would be a bug nobody would think to look for.
-  const pushableFiles = () => exportEntries(ytext.toString(), filesSnapshot())
+  const pushableFiles = () => exportEntries(entry, ytext.toString(), filesSnapshot())
+
+  // The live workspace in marker format. The history panel sends this along with
+  // a restore so the server can snapshot it first.
+  const currentWorkspace = () => (ytext.toString().trim() ? serializeWorkspace(entry, ytext.toString(), filesSnapshot()) : '')
 
   // Ghost text asks for this on a pause in typing. It stays quiet by design:
   // failures return null rather than throwing, so a provider hiccup means "no
@@ -732,6 +857,9 @@ function Room({
         onExport={exportZip}
         exporting={exporting}
         onGithub={() => setGithubOpen(true)}
+        onHistory={() => setHistoryOpen(true)}
+        onDiscover={() => setDiscoverOpen(true)}
+        runtime={runtime}
         awareness={provider.awareness}
         voiceOut={voiceOut}
         onToggleVoice={toggleVoice}
@@ -750,6 +878,7 @@ function Room({
           projectName={projectName}
           files={files}
           active={activeFile}
+          entry={entry}
           onSelect={selectFile}
           onCreate={createFile}
           onRename={renameFile}
@@ -770,6 +899,8 @@ function Room({
           tab={tab}
           onTab={setTab}
           previewCode={previewCode}
+          runtime={runtime}
+          runNonce={runNonce}
           building={building}
           builderName={meta.building?.by}
           activeFile={activeFile}
@@ -807,9 +938,12 @@ function Room({
         <ShareDialog
           projectId={projectId}
           projectName={projectName}
-          isOwner={projects.find((p) => p.id === projectId)?.ownerId === user!.id}
+          isOwner={project?.ownerId === user!.id}
           publishableHtml={publishableHtml}
           hasApp={hasIndex}
+          isTemplate={template.isTemplate}
+          description={template.description}
+          onTemplateChange={setTemplate}
           onClose={() => setShareOpen(false)}
         />
       )}
@@ -817,12 +951,23 @@ function Room({
         <GitHubDialog
           projectId={projectId}
           projectName={projectName}
-          isOwner={projects.find((p) => p.id === projectId)?.ownerId === user!.id}
+          isOwner={project?.ownerId === user!.id}
           files={pushableFiles}
           hasApp={hasIndex}
           onClose={() => setGithubOpen(false)}
         />
       )}
+      {historyOpen && (
+        <HistoryDialog
+          projectId={projectId}
+          projectName={projectName}
+          runtime={runtime}
+          currentWorkspace={currentWorkspace}
+          onRestore={restoreWorkspace}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+      {discoverOpen && <DiscoverDialog onForked={onForked} onClose={() => setDiscoverOpen(false)} />}
     </div>
   )
 }

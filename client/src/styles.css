@@ -147,6 +147,7 @@ button { font-family: inherit; }
 .tree-row .ti.html { color: #ff8a65; }
 .tree-row .ti.css { color: #64b5f6; }
 .tree-row .ti.js { color: #ffd54f; }
+.tree-row .ti.py { color: #6ee7a8; }
 .tree-row .tname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row .tbadge { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; flex: none; }
 .tree-row .row-actions { display: none; gap: 2px; flex: none; }
@@ -401,6 +402,12 @@ button { font-family: inherit; }
 .ws-pill { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 11px; }
 .ws-pill .lock { width: 12px; height: 12px; color: var(--cyan); flex: none; }
 .ws-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The Python console's address bar. The leading icon carries the run state,
+   because the frame it describes is sandboxed and can only report by message. */
+.ws-pill.py svg { flex: none; color: var(--muted-2); transition: color 0.2s; }
+.ws-pill.py.running svg { color: var(--cyan); }
+.ws-pill.py.done svg { color: #5ef0b6; }
+.ws-pill.py.error svg { color: #ef6a6a; }
 
 .ws-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 .preview-frame { width: 100%; height: 100%; border: 0; background: #fff; display: block; }
@@ -536,6 +543,82 @@ button { font-family: inherit; }
 .sh-meta a { color: var(--cyan); font-family: var(--font-mono); text-decoration: none; }
 .sh-meta a:hover { text-decoration: underline; }
 
+/* ───────────── Runtime badges ───────────── */
+/* Shown only for projects that aren't the default web runtime: a label on every
+   project is noise, a label on the surprising one is information. */
+.rt-badge { display: inline-flex; align-items: center; gap: 5px; flex: none; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #6ee7a8; background: rgba(110, 231, 168, 0.11); border: 1px solid rgba(110, 231, 168, 0.28); border-radius: 7px; padding: 4px 8px; }
+.rt-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; border-radius: 5px; padding: 2px 6px; }
+.rt-tag.web { color: #8fd0ff; background: rgba(58, 160, 255, 0.12); border: 1px solid rgba(58, 160, 255, 0.26); }
+.rt-tag.python { color: #6ee7a8; background: rgba(110, 231, 168, 0.11); border: 1px solid rgba(110, 231, 168, 0.26); }
+
+/* ───────────── History (checkpoints) ───────────── */
+.sheet.hist { width: min(1000px, 100%); height: min(88vh, 760px); max-height: min(88vh, 760px); }
+.hist-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); }
+.hist-list { overflow-y: auto; border-right: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 1px; scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+.hist-item { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); border-radius: 9px; padding: 9px 10px; cursor: pointer; transition: background 0.15s; }
+.hist-item:hover { background: var(--surface); }
+.hist-item.sel { background: var(--surface-2); }
+.hist-item:focus-visible { outline: 2px solid var(--violet); outline-offset: -2px; }
+/* The timeline rail. The dot marks the checkpoint; the line joins it to the
+   next one, so the list reads as a sequence rather than a pile. */
+.hist-rail { position: relative; flex: none; width: 11px; align-self: stretch; display: flex; justify-content: center; padding-top: 5px; }
+.hist-rail i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); flex: none; z-index: 1; transition: background 0.15s, box-shadow 0.15s; }
+.hist-rail::before { content: ''; position: absolute; top: 14px; bottom: -10px; width: 1px; background: var(--border); }
+.hist-item:last-child .hist-rail::before { display: none; }
+.hist-item.sel .hist-rail i { background: var(--cyan); box-shadow: 0 0 0 3px rgba(56, 224, 216, 0.18); }
+.hist-item.meta .hist-rail i { background: transparent; border: 1px solid var(--muted-2); }
+.hist-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hist-prompt { font-size: 12.5px; line-height: 1.45; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.hist-item.meta .hist-prompt { color: var(--muted); font-style: italic; }
+.hist-when { font-size: 10.5px; color: var(--muted-2); font-family: var(--font-mono); }
+.hist-when em { font-style: normal; color: var(--cyan); }
+.hist-preview { min-width: 0; display: flex; flex-direction: column; }
+.hist-frame { flex: 1; min-height: 0; padding: 12px; }
+.hist-frame iframe { width: 100%; height: 100%; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; display: block; }
+.hist-foot { flex: none; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--border); }
+.hist-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.hist-meta .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text); }
+.hist-sub { font-size: 10.5px; color: var(--muted-2); font-family: var(--font-mono); }
+.hist-empty { display: grid; place-items: center; align-content: center; gap: 10px; padding: 28px 24px; text-align: center; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.hist-empty svg { color: var(--muted-2); }
+.hist-empty p { margin: 0; max-width: 34ch; }
+
+/* ───────────── Discover ───────────── */
+.sheet.disc { width: min(760px, 100%); height: min(86vh, 720px); max-height: min(86vh, 720px); }
+.disc-tabs { flex: none; display: flex; gap: 4px; padding: 0 14px 10px; border-bottom: 1px solid var(--border); }
+.disc-tabs .tab b { font-size: 10px; font-weight: 700; color: var(--muted-2); background: var(--surface-2); border-radius: 20px; padding: 1px 6px; }
+.disc-tabs .tab.active b { color: var(--text); }
+.disc-body { flex: 1; min-height: 0; }
+.disc-lede { margin: 14px 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--muted); max-width: 62ch; }
+.disc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; padding-bottom: 6px; }
+.disc-card { display: flex; flex-direction: column; gap: 8px; padding: 13px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); transition: border-color 0.16s, transform 0.16s; }
+.disc-card:hover { border-color: var(--border-2); transform: translateY(-1px); }
+.disc-card header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.disc-title { font-family: var(--font-display); font-weight: 650; font-size: 13.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disc-desc { margin: 0; font-size: 12px; line-height: 1.55; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.5em; }
+.disc-desc.mono { font-family: var(--font-mono); font-size: 11px; color: var(--muted-2); word-break: break-all; }
+.disc-card footer { display: flex; align-items: center; gap: 10px; margin-top: auto; }
+.disc-card footer .spacer { flex: 1; }
+.disc-by { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar.tiny { width: 18px; height: 18px; font-size: 8px; border-width: 0; margin-left: 0; flex: none; font-style: normal; }
+.disc-stat { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 11px; color: var(--muted-2); font-family: var(--font-mono); }
+.disc-when { font-size: 10.5px; color: var(--muted-2); font-family: var(--font-mono); }
+.btn.sm { font-size: 12px; padding: 6px 11px; text-decoration: none; }
+.disc-empty { display: grid; place-items: center; align-content: center; gap: 10px; padding: 34px 24px; text-align: center; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.disc-empty svg { color: var(--muted-2); }
+.disc-empty p { margin: 0; max-width: 44ch; }
+.disc-empty b { color: var(--text); font-weight: 600; }
+
+/* ───────────── Share: opt-in checkboxes ───────────── */
+.sh-check { display: flex; align-items: flex-start; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; }
+.sh-check:hover { border-color: var(--border-2); }
+.sh-check input { margin: 2px 0 0; accent-color: var(--violet); width: 15px; height: 15px; flex: none; cursor: pointer; }
+.sh-check span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sh-check b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.sh-check em { font-style: normal; font-size: 11.5px; line-height: 1.5; color: var(--muted-2); }
+.sh-note.ok { color: #6ee7a8; }
+.sh-note.ok b { color: #6ee7a8; font-weight: 650; }
+
 /* ───────────── Responsive ───────────── */
 /* Narrow windows: the explorer and its splitter drop out together so the
    remaining three children (workspace, splitter, chat) fill three tracks. */
@@ -550,6 +633,13 @@ button { font-family: inherit; }
   .workspace + .splitter { cursor: default; pointer-events: none; }
   .conv { border-left: 0; border-top: 1px solid var(--border); }
   .hero h1 { font-size: 23px; }
+}
+/* The history panel is two columns of real content, so it stacks rather than
+   squeezing: a timeline 120px wide is unreadable and a preview that narrow is
+   worse than none. */
+@media (max-width: 780px) {
+  .hist-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 40%) minmax(0, 1fr); }
+  .hist-list { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
 @media (prefers-reduced-motion: reduce) {

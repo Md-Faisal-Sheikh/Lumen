@@ -3,7 +3,22 @@ import { useAuth } from '../auth'
 import { useAwareness } from '../yhooks'
 import { type ProjectSummary } from '../api'
 import { toast } from '../toast'
-import { Spark, Share, Play, Plus, SignOut, Volume, VolumeOff, Download, GitHub, GhostText } from '../icons'
+import { runtimeLabel, type Runtime } from '../runtime'
+import {
+  Spark,
+  Share,
+  Play,
+  Plus,
+  SignOut,
+  Volume,
+  VolumeOff,
+  Download,
+  GitHub,
+  GhostText,
+  Compass,
+  HistoryIcon,
+  Terminal,
+} from '../icons'
 
 const initials = (name: string) =>
   name
@@ -27,6 +42,9 @@ export function TopBar({
   onExport,
   exporting,
   onGithub,
+  onHistory,
+  onDiscover,
+  runtime,
   awareness,
   voiceOut,
   onToggleVoice,
@@ -44,6 +62,10 @@ export function TopBar({
   onExport: () => void
   exporting: boolean
   onGithub: () => void
+  onHistory: () => void
+  onDiscover: () => void
+  /** Which engine runs this project. Shown as a badge when it isn't the default. */
+  runtime: Runtime
   awareness: any
   voiceOut: boolean
   onToggleVoice: () => void
@@ -141,8 +163,26 @@ export function TopBar({
         </select>
       </div>
 
+      {/* The runtime badge appears only for projects that aren't the default web
+          one. A label on every project would be noise; a label on the surprising
+          case is information. */}
+      {runtime === 'python' && (
+        <span className="rt-badge" title="This project runs CPython in the browser (Pyodide)">
+          <Terminal width={12} height={12} /> {runtimeLabel(runtime)}
+        </span>
+      )}
+
       <button className="btn ghost icon" onClick={onNew} title="New project" aria-label="New project">
         <Plus width={16} height={16} />
+      </button>
+
+      <button
+        className="btn ghost icon"
+        onClick={onDiscover}
+        title="Discover — templates to fork and published projects to look at"
+        aria-label="Discover templates and published projects"
+      >
+        <Compass width={16} height={16} />
       </button>
 
       <div className="spacer" />
@@ -224,6 +264,14 @@ export function TopBar({
 
       <button className="btn ghost" onClick={onRun}>
         <Play width={14} height={14} /> Run
+      </button>
+      <button
+        className="btn ghost icon"
+        onClick={onHistory}
+        title="History — every build is a checkpoint you can go back to"
+        aria-label="Open version history"
+      >
+        <HistoryIcon width={16} height={16} />
       </button>
       {suggestionsSupported && (
         <button

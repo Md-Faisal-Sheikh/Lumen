@@ -1,4 +1,5 @@
 import type { LineEdit } from './files'
+import type { Runtime } from './runtime'
 
 // Base URLs. Both default to a local server; override with VITE_API_URL / VITE_WS_URL.
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
@@ -44,6 +45,14 @@ export interface ProjectSummary {
   name: string
   ownerId: string
   role?: string
+  /** Which engine runs this project's code. Absent on older responses = 'web'. */
+  runtime?: Runtime
+  /** Offered as a starting point anyone signed in may fork. */
+  isTemplate?: boolean
+  description?: string | null
+  forkCount?: number
+  /** The name of the project this one was forked from, if any. */
+  forkedFromName?: string | null
   updatedAt?: string
 }
 export interface Publication {
@@ -51,8 +60,40 @@ export interface Publication {
   /** Absolute link to hand out — works without a Lumen account. */
   url: string
   views: number
+  /** Whether this page appears in the public gallery. Separate from publishing. */
+  listed: boolean
   publishedAt: string
   updatedAt: string
+}
+export interface Version {
+  id: string
+  /** What produced this checkpoint — the prompt, the edit, or a restore. */
+  prompt: string
+  createdAt: string
+}
+export interface VersionDetail extends Version {
+  /** The full marker-format workspace as it stood. */
+  html: string
+}
+export interface TemplateCard {
+  id: string
+  name: string
+  description: string | null
+  runtime: Runtime
+  forkCount: number
+  updatedAt: string
+  authorName: string
+  authorColor: string
+}
+export interface GalleryCard {
+  slug: string
+  title: string
+  url: string
+  views: number
+  runtime: Runtime
+  updatedAt: string
+  authorName: string
+  authorColor: string
 }
 export interface CacheStats {
   entries: number
@@ -127,11 +168,33 @@ export const api = {
   updateMe: (body: { name?: string; color?: string }) =>
     req<{ user: PublicUser }>('/api/auth/me', { method: 'PATCH', body: JSON.stringify(body) }),
   projects: () => req<{ projects: ProjectSummary[] }>('/api/projects'),
-  createProject: (name: string) => req<{ project: ProjectSummary }>('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }),
+  createProject: (name: string, runtime: Runtime = 'web') =>
+    req<{ project: ProjectSummary }>('/api/projects', { method: 'POST', body: JSON.stringify({ name, runtime }) }),
   project: (id: string) => req<{ project: any }>(`/api/projects/${id}`),
   rename: (id: string, name: string) => req(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  // Template settings live on the same PATCH; separated here because they are
+  // owner-only and the call sites are different screens.
+  setTemplate: (id: string, body: { isTemplate?: boolean; description?: string | null }) =>
+    req<{ ok: true; project: ProjectSummary }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  fork: (id: string, name?: string) =>
+    req<{ project: ProjectSummary }>(`/api/projects/${id}/fork`, { method: 'POST', body: JSON.stringify({ name }) }),
   invite: (id: string, email: string) => req(`/api/projects/${id}/invite`, { method: 'POST', body: JSON.stringify({ email }) }),
-  versions: (id: string) => req<{ versions: { id: string; prompt: string; createdAt: string }[] }>(`/api/projects/${id}/versions`),
+
+  // ── History ──
+  versions: (id: string) => req<{ versions: Version[] }>(`/api/projects/${id}/versions`),
+  version: (id: string, versionId: string) =>
+    req<{ version: VersionDetail }>(`/api/projects/${id}/versions/${versionId}`),
+  // The current workspace travels with the request so the server can snapshot
+  // it before handing back the old one — which is what makes Restore undoable.
+  restoreVersion: (id: string, versionId: string, body: { currentCode: string; label: string }) =>
+    req<{ version: VersionDetail }>(`/api/projects/${id}/versions/${versionId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // ── Discovery (unauthenticated on the server; the token is sent and ignored) ──
+  templates: () => req<{ templates: TemplateCard[] }>('/api/discover/templates'),
+  gallery: () => req<{ pages: GalleryCard[] }>('/api/discover/gallery'),
   edit: (id: string, prompt: string, currentCode: string) =>
     req<{ summary: string | null; edits: LineEdit[]; skipped: string[]; detail: string }>(`/api/projects/${id}/edit`, {
       method: 'POST',
@@ -139,8 +202,13 @@ export const api = {
     }),
   cacheStats: () => req<{ stats: CacheStats }>('/api/cache/stats'),
   publication: (id: string) => req<{ publication: Publication | null }>(`/api/projects/${id}/publish`),
-  publish: (id: string, html: string) =>
-    req<{ publication: Publication }>(`/api/projects/${id}/publish`, { method: 'POST', body: JSON.stringify({ html }) }),
+  // `listed` is omitted rather than defaulted on an update, so refreshing a
+  // published page never silently changes whether it appears in the gallery.
+  publish: (id: string, html: string, listed?: boolean) =>
+    req<{ publication: Publication }>(`/api/projects/${id}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(listed === undefined ? { html } : { html, listed }),
+    }),
   unpublish: (id: string) => req<{ ok: true }>(`/api/projects/${id}/publish`, { method: 'DELETE' }),
   inlineEdit: (id: string, body: { file: string; start: number; end: number; instruction: string; currentCode: string }) =>
     req<{ summary: string | null; edit: LineEdit; detail: string }>(`/api/projects/${id}/inline-edit`, {

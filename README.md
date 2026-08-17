@@ -26,6 +26,9 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 - **A build library that recognises paraphrases** — ask for *"snake game with neon colors"* when someone already built *"a neon snake game"* and you get it instantly, with no AI call. The cache matches on meaning, not on exact wording, and always tells you when it reused something.
 - **Publish to a public link** — one click gives the project a `/p/<slug>` page that *anyone* can open. No account, no sign-in, nothing to install — just send the link.
 - **Export as a real project** — one click downloads a `.zip` of actual files in actual folders: `index.html`, `styles.css`, `app.js`, `styles/theme.css`. Unzip it and double-click `index.html`; there's no build step and nothing to install. The archive is written in the browser by hand — no library, no server round-trip.
+- **Python, not just web pages** — start a project on the **Python** runtime and Lumen writes real Python that runs in a real CPython interpreter. No container, no server-side execution: CPython is compiled to WebAssembly and loaded into the same sandboxed iframe the web preview uses. `import numpy`, dataclasses, sibling modules, tracebacks — all of it.
+- **Fork, templates & a gallery** — offer a project as a **template** and anyone signed in can fork it into an editable copy of their own. Publish a page and choose whether to **list** it, and it appears in a public gallery. Both are opt-in; nothing becomes discoverable by accident.
+- **Checkpoints you can go back to** — every build and edit has always been snapshotted. Now there's a timeline: pick a checkpoint, see how the project looked, and restore it. Restoring saves the current code as its own checkpoint first, so the way out of a restore is another restore.
 - **Accounts, projects & history** — sign in, create projects, invite teammates, and every build is snapshotted as a version.
 
 ## Tech stack (all free / open-source)
@@ -33,6 +36,7 @@ Describe an app in plain language — Lumen writes the code, runs it live, and y
 | Layer | Choice | Why it's free |
 |---|---|---|
 | Client | React 18 + Vite + TypeScript | open-source |
+| Python runtime | **Pyodide** (CPython 3 → WebAssembly) | runs in the browser; no container, no server |
 | Editor | CodeMirror 6 + `y-codemirror.next` | collaborative editing + in-editor cursors |
 | Real-time | **Yjs** CRDT over self-hosted **Hocuspocus** WebSocket server | you host it; no SaaS |
 | AI engine | **OpenRouter** · **Google Gemini** · **Ollama** (pluggable) | all have free tiers; Ollama is fully local |
@@ -132,6 +136,51 @@ The two are genuinely different requests and the server treats them as such. A w
 > **On free-tier vision models.** A provider's best *coding* model usually can't see, so an attached image is routed to a separate vision model and text builds keep running on whatever you already configured. For OpenRouter that setting is a comma-separated **fallback list**, and it earns its keep: while this was being built the shipped default had been retired outright (404) and its replacement answered 429 from a saturated shared pool the same afternoon. A model that is gone or busy hands over to the next one; only the opening response is retried, because once code is streaming the room has already watched it arrive. Pin the variable to a single name if you'd rather be told than quietly substituted. If nothing is configured that can see, the sketch button doesn't appear at all — the client asks `/api/health` rather than offering a button that can only fail.
 
 Smaller vision models also tend to answer in **markdown** instead of Lumen's `===== FILE: path =====` protocol — but they still split the project correctly and label each block with its language, which is the same information under a different name. [`client/src/files.ts`](client/src/files.ts) reads it: the response's shape is decided once, from its first real line, and a markdown answer has its fences treated as file boundaries (`html` → `index.html`, `css` → `styles.css`, `js` → `app.js`), its between-block prose dropped, and its summary comment stripped. Deciding the shape once, up front, is what stops a ``` inside a *generated* app — a markdown editor's sample text — from being mistaken for a boundary.
+
+### Python in the browser
+
+A project picks its **runtime** when it is created, and that choice is permanent — it decides the entry file (`index.html` or `main.py`), the build prompt, and what the left pane shows.
+
+On the Python runtime the preview becomes a **console**. Lumen writes `main.py` plus whatever modules the program needs, and runs it in [Pyodide](https://pyodide.org) — CPython 3 compiled to WebAssembly. The interpreter is a one-time ~10 MB download the browser then caches. What actually works:
+
+- **The standard library**, in full. `collections`, `dataclasses`, `itertools`, `json`, `re`.
+- **Sibling modules.** `import board` resolves, because the whole workspace is written into the interpreter's filesystem at its real paths — non-Python files included, so `open('data/seed.txt')` finds what you put there.
+- **`if __name__ == '__main__':`**, because the entry module is executed through `runpy.run_path(..., run_name='__main__')` rather than being `exec`'d.
+- **Packages from the Pyodide distribution.** An `import numpy` is detected before the program starts and fetched automatically. Nobody installs anything.
+
+Three things about this are worth knowing, because they follow from running an interpreter inside a preview pane rather than on a machine:
+
+- **There is no network, no threading, no subprocess, and no host filesystem.** The build prompt says so explicitly, which is why the model writes a scripted demo rather than a socket server.
+- **The program has to end.** Pyodide runs on the iframe's main thread, so a `while True:` with no exit wedges *that frame*. The surrounding Lumen UI stays responsive, and pressing **Run** replaces the frame outright — that remount is both how you re-run a finished program and how you escape one that never finishes. The prompt also forbids unbounded loops.
+- **A stalled package download can't hang the console.** Import resolution is raced against a 90-second bound; past it the program runs anyway and a missing module arrives as an ordinary `ImportError`, which names the module and the line that wanted it. The alternative — an await that never settles — is a console that says "Resolving imports…" forever and never reaches your code.
+
+> **Tracebacks are trimmed.** Pyodide's raw traceback opens with six frames of its own machinery — `eval_code_async`, `CodeRunner.run_async`, two `<frozen runpy>` frames — before reaching anything you wrote. A one-line bug should not look like a bug in the runtime, so everything above the first frame in your project is dropped. If no frame of yours appears, the failure came from the harness and the whole thing is shown.
+
+Published Python projects serve that same console page, so a public link runs the program in the reader's browser exactly as it ran in yours — with no server executing anything on either side.
+
+### Fork, templates, and the gallery
+
+**Templates.** Open **Share** on a project you own and offer it as a template. It appears under **Discover → Templates**, and anyone signed in can fork it: a new project they own, with the code copied and their own history starting at the fork point.
+
+Forking copies the *live* document, not the database row that holds it. Those differ — Hocuspocus keeps a room's Yjs document in memory and persists it on a debounce, so the stored row for a project someone is actively editing is always slightly behind. Reading it directly would hand the forker a workspace missing the last few seconds of work, intermittently, and only under the conditions where anyone would notice. So the fork reads through the server's own document handle, which loads the room if it is cold and joins it if it is warm.
+
+What a fork deliberately does *not* carry is the conversation. The chat array and the `meta` map live in the same Yjs document as the code, so a naive copy would hand a stranger every prompt the original author typed and every sketch they attached — along with a `building` flag left set by a build that was mid-stream when the fork was taken, which would leave the new room stuck behind an overlay nothing will ever clear.
+
+**The gallery** lists published pages, and listing is a second decision rather than a consequence of the first. Publishing has always been unlisted-by-link — the random slug suffix exists precisely so a URL cannot be guessed from a project name — so a page appears in the gallery only when its owner ticks the box, and refreshing a published page never changes that setting. The gallery endpoint selects a title, a slug, an author and a view count; it never selects `html`, which would mean serving user-authored script from Lumen's own origin, the exact thing [publishing](#publishing-to-a-public-link) goes to such lengths to avoid.
+
+Who may fork what follows the rule the rest of the app uses: a template is forkable by anyone, and anything else is forkable by its members only. Both "no such project" and "not yours to fork" answer the same 404, so the route can't be used to discover which project ids exist.
+
+### Checkpoints
+
+Every build, line edit and inline edit has always written a `Version` row. The **history** button in the top bar is what finally makes them reachable: a timeline down the left, the selected checkpoint rendered on the right in the same sandbox the live preview uses, and one button to go back.
+
+Two decisions matter here.
+
+**Restoring never destroys anything.** Before handing back an old workspace the server snapshots the current one as its own checkpoint, so pressing Restore is itself undoable. Without that, restoring an hour-old checkpoint would silently discard everything since — the one thing a history feature must never do. Both entries are labelled (`Before restoring …`, `Restored …`) and marked in the timeline, so bookkeeping is visible without being mistaken for work somebody did.
+
+**The server owns the history; the client owns the document.** The restore endpoint records what happened and returns the old workspace, but it does not write the files. The document is a CRDT with live collaborators in it, and a second writer reaching in from the server would race the room and land on top of whatever someone typed a second ago. The client applies the restore through Yjs like any other edit: one transaction, a ranged replace per file so untouched regions keep their cursors, and an explicit delete of files the checkpoint doesn't have — because a "restored" project that still contains a file created afterwards is a state the project was never actually in.
+
+The snapshot is parsed by the *same* writer a live build streams into, rather than by a second copy of the marker parser. That is deliberate: a checkpoint is a recording of exactly what the model once emitted, so two parsers that disagreed would make restoring a build produce a workspace the build itself never had.
 
 ### The build library
 
@@ -355,7 +404,10 @@ lumen/
 │     ├─ index.ts          HTTP server + WebSocket upgrade
 │     ├─ auth.ts           JWT register / login / me
 │     ├─ projects.ts       Project CRUD + SSE build endpoint + completion endpoint
-│     ├─ ai.ts             Pluggable streaming providers (free) + sketch/screenshot prompts
+│     ├─ ai.ts             Pluggable streaming providers (free) + sketch/screenshot/Python prompts
+│     ├─ runtime.ts        Which engine runs a project, and its entry file
+│     ├─ fork.ts           Copying a live Yjs document into a new project
+│     ├─ discover.ts       Public templates + gallery (unauthenticated by design)
 │     ├─ vision.ts         Image validation + which model can see
 │     ├─ completion.ts     Ghost-text prompt + answer cleanup (pure, tested)
 │     ├─ github.ts         Account, repo link, and the Git Data API commit
@@ -367,7 +419,9 @@ lumen/
       ├─ vision.ts         Scale · flatten · encode an attached image
       ├─ speech.ts         Dictation state machine + chunked speech output
       ├─ ghost.ts          CodeMirror inline-completion extension
-      └─ components/        TopBar · Conversation · Composer · SketchPad · PreviewPane · CodeEditor · Cursors · GitHubDialog
+      ├─ runtime.ts        Runtime table, mirrored from the server's
+      ├─ python.ts         The Pyodide console document
+      └─ components/        TopBar · Conversation · Composer · SketchPad · PreviewPane · CodeEditor · Cursors · GitHubDialog · HistoryDialog · DiscoverDialog
 ```
 
 ## Security notes

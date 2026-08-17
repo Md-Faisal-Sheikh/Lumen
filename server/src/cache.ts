@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { prisma } from './db'
 import { authMiddleware } from './auth'
+import type { Runtime } from './runtime'
 import { bestMatch, buildIdf, prepare, SIMILARITY_THRESHOLD, type PreparedPrompt } from './similarity'
 
 // The shared build cache. Anyone's first-time build of a given idea is generated
@@ -19,7 +20,12 @@ export const promptKey = (prompt: string) => prompt.toLowerCase().replace(/\s+/g
 
 // Only cache output that actually looks like a generated project — never a
 // refusal or error prose, which would poison the cache for every user.
-export const looksLikeProject = (out: string) => /={3,}\s*FILE:/.test(out) || /<!doctype html/i.test(out)
+//
+// The web form is a marker block or a bare HTML document. A Python build has no
+// <!doctype> to fall back on, so the marker is the whole test there — which is
+// also what stops a model's apology from being cached as a program.
+export const looksLikeProject = (out: string, runtime: Runtime = 'web') =>
+  runtime === 'python' ? /={3,}\s*FILE:/.test(out) : /={3,}\s*FILE:/.test(out) || /<!doctype html/i.test(out)
 
 // How many entries the similarity pass considers. Prompts are short, so this is
 // a few tens of kilobytes; the ceiling exists so the cost stays flat as the
@@ -62,8 +68,10 @@ async function record(outcome: 'exact' | 'similar' | 'miss') {
  * Find a cached build for this prompt: exact key first, then similarity.
  * Records the outcome either way, so the hit rate reflects every consultation.
  */
-export async function lookupBuild(prompt: string): Promise<CacheHit | null> {
-  const exact = await prisma.buildCache.findUnique({ where: { promptKey: promptKey(prompt) } })
+export async function lookupBuild(prompt: string, runtime: Runtime = 'web'): Promise<CacheHit | null> {
+  const exact = await prisma.buildCache.findUnique({
+    where: { promptKey_runtime: { promptKey: promptKey(prompt), runtime } },
+  })
   if (exact) {
     await prisma.buildCache.update({ where: { id: exact.id }, data: { hits: { increment: 1 } } })
     await record('exact')
@@ -71,8 +79,11 @@ export async function lookupBuild(prompt: string): Promise<CacheHit | null> {
   }
 
   // Only the prompts come back here — the outputs are large and we need exactly
-  // one of them.
+  // one of them. Scoped to this runtime: a paraphrase match across runtimes
+  // would be the same mistake the exact key already refuses, arrived at by a
+  // longer route.
   const candidates = await prisma.buildCache.findMany({
+    where: { runtime },
     select: { id: true, prompt: true },
     orderBy: { updatedAt: 'desc' },
     take: CANDIDATE_LIMIT,
@@ -116,12 +127,12 @@ export async function lookupBuild(prompt: string): Promise<CacheHit | null> {
 }
 
 /** Remember a freshly generated build so the next person asking doesn't pay for it. */
-export async function storeBuild(prompt: string, output: string, summary: string | null) {
-  if (!looksLikeProject(output)) return
+export async function storeBuild(prompt: string, output: string, summary: string | null, runtime: Runtime = 'web') {
+  if (!looksLikeProject(output, runtime)) return
   const key = promptKey(prompt)
   await prisma.buildCache.upsert({
-    where: { promptKey: key },
-    create: { promptKey: key, prompt, output, summary },
+    where: { promptKey_runtime: { promptKey: key, runtime } },
+    create: { promptKey: key, runtime, prompt, output, summary },
     update: { output, summary },
   })
 }

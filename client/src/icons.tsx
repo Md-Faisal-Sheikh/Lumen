@@ -215,6 +215,37 @@ export const CommitIcon = (p: SVGProps<SVGSVGElement>) => (
     <path d="M3 12h5.8M15.2 12H21" />
   </svg>
 )
+/** Discovery: a compass. Opens templates and the public gallery. */
+export const Compass = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m15.2 8.8-1.9 4.5-4.5 1.9 1.9-4.5 4.5-1.9Z" />
+  </svg>
+)
+/** A fork: one commit line branching into two. */
+export const Fork = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <circle cx="7" cy="5" r="2.2" />
+    <circle cx="17" cy="5" r="2.2" />
+    <circle cx="12" cy="19" r="2.2" />
+    <path d="M7 7.2v2.3a3 3 0 0 0 3 3h4a3 3 0 0 0 3-3V7.2M12 12.5v4.3" />
+  </svg>
+)
+/** A console: a prompt caret and a line, for the Python runtime. */
+export const Terminal = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <path d="m7.5 10 2.5 2-2.5 2M13 14h3.5" />
+  </svg>
+)
+/** Restore: an arrow curving back to a point on a line. */
+export const Restore = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}>
+    <path d="M3.5 8.5A8.5 8.5 0 1 1 3 12" />
+    <path d="M3.5 4v4.5H8" />
+    <circle cx="12" cy="12" r="2.2" />
+  </svg>
+)
 /** The composer button that opens the sketch pad: a pencil over a board. */
 export const SketchIcon = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}>

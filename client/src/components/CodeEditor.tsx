@@ -6,6 +6,7 @@ import { Decoration, keymap, type DecorationSet } from '@codemirror/view'
 import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
 import { javascript } from '@codemirror/lang-javascript'
+import { python } from '@codemirror/lang-python'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { yCollab } from 'y-codemirror.next'
 import { inlineCompletion, type CompletionRequest } from '../ghost'
@@ -17,6 +18,7 @@ function languageFor(path: string) {
   if (/\.(ts|tsx)$/i.test(path)) return javascript({ typescript: true, jsx: /x$/i.test(path) })
   if (/\.(m?js|jsx)$/i.test(path)) return javascript({ jsx: /x$/i.test(path) })
   if (/\.json$/i.test(path)) return javascript()
+  if (/\.pyw?$/i.test(path)) return python()
   return html()
 }
 

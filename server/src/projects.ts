@@ -18,6 +18,8 @@ import {
 import { makeSlug, publicUrl } from './publish'
 import { lookupBuild, storeBuild } from './cache'
 import { parseImage, visionCapability, type ImageAttachment } from './vision'
+import { asRuntime, runtimeLabel, type Runtime } from './runtime'
+import { copyDocInto, freshForkState, readLiveDoc, seedForkVersion } from './fork'
 
 export const projectsRouter = Router()
 
@@ -45,18 +47,26 @@ projectsRouter.get('/', async (req, res) => {
       name: m.project.name,
       ownerId: m.project.ownerId,
       role: m.role,
+      runtime: asRuntime(m.project.runtime),
+      isTemplate: m.project.isTemplate,
+      description: m.project.description,
+      forkCount: m.project.forkCount,
+      forkedFromName: m.project.forkedFromName,
       updatedAt: m.project.updatedAt,
     })),
   })
 })
 
-// Create a project and make the creator its owner.
+// Create a project and make the creator its owner. The runtime is fixed at
+// creation because it decides the entry file, and switching it later on a
+// project that already has code would leave that code stranded — see PATCH.
 projectsRouter.post('/', async (req, res) => {
   const name = (req.body?.name ?? 'Untitled project').toString().trim().slice(0, 80) || 'Untitled project'
+  const runtime = asRuntime(req.body?.runtime)
   const project = await prisma.project.create({
-    data: { name, ownerId: uid(req), members: { create: { userId: uid(req), role: 'owner' } } },
+    data: { name, runtime, ownerId: uid(req), members: { create: { userId: uid(req), role: 'owner' } } },
   })
-  res.json({ project: { id: project.id, name: project.name, ownerId: project.ownerId } })
+  res.json({ project: { id: project.id, name: project.name, ownerId: project.ownerId, runtime } })
 })
 
 // Project detail, including who is in the room.
@@ -73,6 +83,12 @@ projectsRouter.get('/:id', async (req, res) => {
       id: project.id,
       name: project.name,
       ownerId: project.ownerId,
+      runtime: asRuntime(project.runtime),
+      isTemplate: project.isTemplate,
+      description: project.description,
+      forkCount: project.forkCount,
+      forkedFromId: project.forkedFromId,
+      forkedFromName: project.forkedFromName,
       members: project.members.map((mm) => ({
         id: mm.user.id,
         name: mm.user.name,
@@ -83,16 +99,129 @@ projectsRouter.get('/:id', async (req, res) => {
   })
 })
 
-// Rename a project (owner or editor).
+// Update a project. Renaming is open to any member; offering the project as a
+// template is not, for the same reason inviting and publishing are not — it
+// hands access to people who don't have it.
 projectsRouter.patch('/:id', async (req, res) => {
   const m = await membership(req.params.id, uid(req))
   if (!m) return res.status(403).json({ error: "You don't have access to this project." })
-  const name = (req.body?.name ?? '').toString().trim().slice(0, 80)
-  if (!name) return res.status(400).json({ error: 'Enter a project name.' })
-  await prisma.project.update({ where: { id: req.params.id }, data: { name } })
+  const project = await prisma.project.findUnique({ where: { id: req.params.id } })
+  if (!project) return res.status(404).json({ error: 'Project not found.' })
+  const isOwner = project.ownerId === uid(req)
+
+  const data: { name?: string; isTemplate?: boolean; description?: string | null } = {}
+
+  if (req.body?.name !== undefined) {
+    const name = req.body.name.toString().trim().slice(0, 80)
+    if (!name) return res.status(400).json({ error: 'Enter a project name.' })
+    data.name = name
+  }
+
+  if (req.body?.isTemplate !== undefined) {
+    if (!isOwner) return res.status(403).json({ error: 'Only the owner can offer this project as a template.' })
+    data.isTemplate = req.body.isTemplate === true
+  }
+
+  if (req.body?.description !== undefined) {
+    if (!isOwner) return res.status(403).json({ error: 'Only the owner can describe this project.' })
+    const description = req.body.description === null ? '' : req.body.description.toString().trim().slice(0, 200)
+    data.description = description || null
+  }
+
+  if (Object.keys(data).length === 0) return res.status(400).json({ error: 'Nothing to update.' })
+
+  const updated = await prisma.project.update({ where: { id: req.params.id }, data })
   // Keep the public page's title in step; a no-op when nothing is published.
-  await prisma.publication.updateMany({ where: { projectId: req.params.id }, data: { title: name } })
-  res.json({ ok: true })
+  if (data.name) {
+    await prisma.publication.updateMany({ where: { projectId: req.params.id }, data: { title: data.name } })
+  }
+  res.json({
+    ok: true,
+    project: {
+      id: updated.id,
+      name: updated.name,
+      isTemplate: updated.isTemplate,
+      description: updated.description,
+      runtime: asRuntime(updated.runtime),
+    },
+  })
+})
+
+// ── Forking ─────────────────────────────────────────────────────────
+//
+// Who may fork what:
+//   · a template   — anyone signed in. That is what marking it a template means.
+//   · anything else — its members only. A project you can open is a project you
+//                     can take a copy of; one you cannot open stays invisible,
+//                     and this route must not become a way to discover that a
+//                     given project id exists.
+//
+// Hence the single 404 for both "no such project" and "not yours to fork": the
+// error tells an unauthorised caller nothing it did not already know.
+projectsRouter.post('/:id/fork', async (req, res) => {
+  const userId = uid(req)
+  const source = await prisma.project.findUnique({ where: { id: req.params.id } })
+  if (!source) return res.status(404).json({ error: 'Project not found.' })
+
+  if (!source.isTemplate) {
+    const m = await membership(source.id, userId)
+    if (!m) return res.status(404).json({ error: 'Project not found.' })
+  }
+
+  const runtime = asRuntime(source.runtime)
+  const name =
+    (req.body?.name ?? '').toString().trim().slice(0, 80) ||
+    `${source.name} (copy)`.slice(0, 80)
+
+  // Read the live document *before* creating anything, so a failure here leaves
+  // no empty project behind.
+  let state: Uint8Array | null
+  try {
+    state = await readLiveDoc(source.id)
+  } catch {
+    return res.status(502).json({ error: 'Could not read that project to copy it. Try again in a moment.' })
+  }
+  if (!state) {
+    return res.status(400).json({ error: 'That project has no code in it yet — there is nothing to fork.' })
+  }
+
+  const forked = freshForkState(state)
+
+  const project = await prisma.project.create({
+    data: {
+      name,
+      runtime,
+      ownerId: userId,
+      description: source.isTemplate ? source.description : null,
+      forkedFromId: source.id,
+      forkedFromName: source.name,
+      members: { create: { userId, role: 'owner' } },
+    },
+  })
+
+  try {
+    await copyDocInto(project.id, forked)
+    await seedForkVersion(project.id, forked, runtime, source.name)
+  } catch (err) {
+    // A project whose document never landed is a broken room: it would open,
+    // sync an empty doc, and quietly present itself as a fork that copied
+    // nothing. Removing it is the honest outcome.
+    await prisma.project.delete({ where: { id: project.id } }).catch(() => {})
+    return res.status(500).json({ error: 'Could not copy that project. Nothing was created.' })
+  }
+
+  // Advisory: a counter must never fail the fork it is counting.
+  prisma.project.update({ where: { id: source.id }, data: { forkCount: { increment: 1 } } }).catch(() => {})
+
+  res.json({
+    project: {
+      id: project.id,
+      name: project.name,
+      ownerId: project.ownerId,
+      runtime,
+      forkedFromName: source.name,
+    },
+  })
 })
 
 // Invite an existing Lumen account into the project by email (owner only).
@@ -119,9 +248,16 @@ projectsRouter.post('/:id/invite', async (req, res) => {
 // at publish time, not the live document — see publish.ts.
 
 const shapePublication = (
-  pub: { slug: string; views: number; createdAt: Date; updatedAt: Date },
+  pub: { slug: string; views: number; listed: boolean; createdAt: Date; updatedAt: Date },
   req: Request
-) => ({ slug: pub.slug, url: publicUrl(req, pub.slug), views: pub.views, publishedAt: pub.createdAt, updatedAt: pub.updatedAt })
+) => ({
+  slug: pub.slug,
+  url: publicUrl(req, pub.slug),
+  views: pub.views,
+  listed: pub.listed,
+  publishedAt: pub.createdAt,
+  updatedAt: pub.updatedAt,
+})
 
 // Where the project currently stands. Any member can see the link.
 projectsRouter.get('/:id/publish', async (req, res) => {
@@ -140,12 +276,17 @@ projectsRouter.post('/:id/publish', async (req: Request, res: Response) => {
   const html = (req.body?.html ?? '').toString()
   if (!html.trim()) return res.status(400).json({ error: 'There is nothing to publish yet — build something first.' })
 
+  // Listing in the public gallery is a separate decision from publishing, and
+  // only ever an explicit one: an absent field leaves the existing setting alone
+  // rather than quietly un-listing a page on every "Update to current code".
+  const listed = req.body?.listed === undefined ? undefined : req.body.listed === true
+
   const existing = await prisma.publication.findUnique({ where: { projectId: project.id } })
   if (existing) {
     // Re-publishing keeps the slug, so links already shared keep working.
     const updated = await prisma.publication.update({
       where: { id: existing.id },
-      data: { html, title: project.name },
+      data: { html, title: project.name, ...(listed === undefined ? {} : { listed }) },
     })
     return res.json({ publication: shapePublication(updated, req) })
   }
@@ -154,7 +295,13 @@ projectsRouter.post('/:id/publish', async (req: Request, res: Response) => {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const created = await prisma.publication.create({
-        data: { projectId: project.id, slug: makeSlug(project.name), title: project.name, html },
+        data: {
+          projectId: project.id,
+          slug: makeSlug(project.name),
+          title: project.name,
+          html,
+          listed: listed === true,
+        },
       })
       return res.json({ publication: shapePublication(created, req) })
     } catch (err: any) {
@@ -173,20 +320,35 @@ projectsRouter.delete('/:id/publish', async (req, res) => {
   res.json({ ok: true })
 })
 
-// Build history.
+// ── Version history (checkpoints) ───────────────────────────────────
+//
+// Every successful build, line edit and inline edit already wrote a Version row.
+// These routes are what make that history reachable: list it, read one back, and
+// restore one.
+//
+// Restoring is split deliberately between the two sides. The server owns the
+// *history* — it records that a restore happened, and to what — while the client
+// owns the *document*, because the document is a CRDT with live collaborators in
+// it. Writing the workspace from here would mean a second writer racing the room
+// and clobbering whatever someone typed in the last second; the client applies
+// it through Yjs like any other edit, so the change merges instead of landing on
+// top of people.
+
+// Build history. `take` is generous but bounded — a busy project accumulates a
+// row per edit, and the panel is a timeline, not an archive.
 projectsRouter.get('/:id/versions', async (req, res) => {
   const m = await membership(req.params.id, uid(req))
   if (!m) return res.status(403).json({ error: "You don't have access to this project." })
   const versions = await prisma.version.findMany({
     where: { projectId: req.params.id },
     orderBy: { createdAt: 'desc' },
-    take: 50,
+    take: 80,
     select: { id: true, prompt: true, createdAt: true },
   })
   res.json({ versions })
 })
 
-// Fetch the full HTML of one saved version.
+// Fetch the full marker-format workspace of one saved version.
 projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
   const m = await membership(req.params.id, uid(req))
   if (!m) return res.status(403).json({ error: "You don't have access to this project." })
@@ -195,6 +357,57 @@ projectsRouter.get('/:id/versions/:versionId', async (req, res) => {
   })
   if (!version) return res.status(404).json({ error: 'Version not found.' })
   res.json({ version })
+})
+
+/**
+ * Restore a checkpoint.
+ *
+ * Two writes happen here and the order matters. Before handing back the old
+ * workspace, the *current* one is snapshotted as its own version — so pressing
+ * Restore is itself undoable. Without that, restoring an hour-old checkpoint
+ * would silently discard everything since, which is the one thing a history
+ * feature must never do.
+ *
+ * The current workspace arrives in the request body rather than being read from
+ * the document, for the same reason the restore is applied client-side: the
+ * client is the one holding the live CRDT, and what it sends is exactly what is
+ * about to be replaced.
+ */
+projectsRouter.post('/:id/versions/:versionId/restore', async (req, res) => {
+  const m = await membership(req.params.id, uid(req))
+  if (!m) return res.status(403).json({ error: "You don't have access to this project." })
+
+  const version = await prisma.version.findFirst({
+    where: { id: req.params.versionId, projectId: req.params.id },
+  })
+  if (!version) return res.status(404).json({ error: 'That checkpoint no longer exists.' })
+
+  const currentCode = (req.body?.currentCode ?? '').toString()
+  const label = (req.body?.label ?? '').toString().trim().slice(0, 120)
+
+  // Snapshot what is about to be lost. A project with nothing in it yet has
+  // nothing to preserve, so an empty body is a legitimate no-op rather than an
+  // error — restoring into a fresh fork is a normal thing to do.
+  if (currentCode.trim()) {
+    await prisma.version.create({
+      data: {
+        projectId: req.params.id,
+        prompt: `Before restoring ${label || 'a checkpoint'}`,
+        html: currentCode,
+      },
+    })
+  }
+
+  await prisma.version.create({
+    data: {
+      projectId: req.params.id,
+      prompt: `Restored ${label || 'a checkpoint'}`,
+      html: version.html,
+    },
+  })
+  await prisma.project.update({ where: { id: req.params.id }, data: { updatedAt: new Date() } })
+
+  res.json({ version: { id: version.id, prompt: version.prompt, html: version.html, createdAt: version.createdAt } })
 })
 
 // ── Inline completion: the ghost text ahead of the cursor. ──
@@ -263,6 +476,13 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   const m = await membership(req.params.id, uid(req))
   if (!m) return res.status(403).json({ error: "You don't have access to this project." })
 
+  // The runtime is read from the project, never from the request. It decides
+  // which system prompt runs and which cache partition is consulted, so letting
+  // a client name it would let one poison the other's cache.
+  const project = await prisma.project.findUnique({ where: { id: req.params.id }, select: { runtime: true } })
+  if (!project) return res.status(404).json({ error: 'Project not found.' })
+  const runtime: Runtime = asRuntime(project.runtime)
+
   const prompt = (req.body?.prompt ?? '').toString()
   const currentCode = req.body?.currentCode ? String(req.body.currentCode) : undefined
   // Set when the user rejected a reused build and wants this one generated.
@@ -273,6 +493,15 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
   // error frame, and "your PNG is 30 MB" deserves a plain 400.
   let image: ImageAttachment | undefined
   if (req.body?.image != null) {
+    // An image is a picture of an interface, and a Python project has no
+    // interface to draw — the console is the output surface. Refusing here is
+    // kinder than letting a vision model produce a page of HTML that the Python
+    // runtime will then decline to run.
+    if (runtime !== 'web') {
+      return res
+        .status(400)
+        .json({ error: `Sketches and screenshots describe a web page — they can't be built into a ${runtimeLabel(runtime)} project.` })
+    }
     const cap = visionCapability()
     if (!cap.supported) {
       return res.status(400).json({ error: cap.reason ?? 'This server is not configured to build from an image.' })
@@ -307,7 +536,7 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
     // hand one of them the other's app. Nor is the result stored, which would
     // poison that key for every text build that follows.
     if (!currentCode && !noCache && !image) {
-      const hit = await lookupBuild(prompt)
+      const hit = await lookupBuild(prompt, runtime)
       if (hit) {
         for (let i = 0; i < hit.output.length; i += 4096) send({ delta: hit.output.slice(i, i + 4096) })
         await prisma.version.create({ data: { projectId: req.params.id, prompt: label, html: hit.output } })
@@ -323,7 +552,7 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
       }
     }
 
-    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }), image)
+    const full = await streamBuild(prompt, currentCode, (delta) => send({ delta }), image, runtime)
     const summary = extractSummary(full)
 
     // Persist a version snapshot and bump the project's updatedAt.
@@ -332,7 +561,7 @@ projectsRouter.post('/:id/build', async (req: Request, res: Response) => {
 
     // Save fresh builds into the shared cache: the next person who asks for
     // this — in these words or near enough — gets it from the database.
-    if (!currentCode && !image) await storeBuild(prompt, full, summary)
+    if (!currentCode && !image) await storeBuild(prompt, full, summary, runtime)
 
     send({ done: true, summary })
   } catch (err: any) {

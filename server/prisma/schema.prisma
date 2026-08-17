@@ -68,12 +68,35 @@ model Project {
   owner     User            @relation("owner", fields: [ownerId], references: [id], onDelete: Cascade)
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
+
+  // Which engine runs this project's code. "web" is a static HTML/CSS/JS app in
+  // a sandboxed iframe; "python" is CPython compiled to WebAssembly (Pyodide),
+  // loaded inside that same iframe. It decides the build prompt, the entry file
+  // (index.html vs main.py), and what the preview pane shows — so it belongs on
+  // the project rather than being inferred from whatever files happen to exist.
+  runtime   String          @default("web")
+
+  // ── Distribution ──────────────────────────────────────────────────
+  // A template is a project its owner has offered as a starting point: any
+  // signed-in user may fork it, nobody may edit it. Ordinary projects stay
+  // forkable by their members only.
+  isTemplate  Boolean       @default(false)
+  description String?       // shown on the template card; owner-written
+  forkCount   Int           @default(0)
+  // Where this project came from, if it was forked. Kept as a plain id rather
+  // than a self-relation: the source may be deleted later, and losing the
+  // provenance string is better than either cascading the delete or blocking it.
+  forkedFromId   String?
+  forkedFromName String?
+
   members   ProjectMember[]
   versions  Version[]
   doc       Doc?
   chats     ChatSession[]
   publication Publication?
   github    GitHubLink?
+
+  @@index([isTemplate, updatedAt])
 }
 
 // A project published to a public link. The HTML is a snapshot taken when the
@@ -88,9 +111,16 @@ model Publication {
   title     String
   html      String
   views     Int      @default(0)
+  // Whether this page appears in the public gallery. Publishing is unlisted by
+  // design — the random slug suffix exists precisely so a link cannot be guessed
+  // from the project name — so being listed is a second, separate decision the
+  // owner makes, never a side effect of pressing Publish.
+  listed    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([listed, updatedAt])
 }
 
 model ProjectMember {
@@ -137,7 +167,12 @@ model ChatSession {
 // straight from the database instead of calling the AI again.
 model BuildCache {
   id          String   @id @default(cuid())
-  promptKey   String   @unique // normalized prompt (lowercased, whitespace-collapsed)
+  promptKey   String // normalized prompt (lowercased, whitespace-collapsed)
+  // Which runtime the cached output was generated for. Part of the key, not a
+  // label: "snake game" means a canvas in an iframe under "web" and a terminal
+  // loop under "python", and serving one for the other would be the cache's
+  // worst failure mode — handing someone code that cannot run at all.
+  runtime     String   @default("web")
   prompt      String // the original prompt as first typed
   output      String // full marker-format model output (every file)
   summary     String?
@@ -145,6 +180,8 @@ model BuildCache {
   similarHits Int      @default(0) // just the ones matched by similarity
   createdAt   DateTime @default(now())
   updatedAt   DateTime @default(now()) @updatedAt
+
+  @@unique([promptKey, runtime])
 }
 
 // Running totals for the build cache, so its value is a number rather than a

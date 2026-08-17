@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type Publication } from '../api'
 import { toast } from '../toast'
-import { Close, Copy, Globe, Share, Spark, Trash } from '../icons'
+import { Close, Copy, Fork, Globe, Share, Spark, Trash } from '../icons'
 
 const copy = async (text: string, done: string) => {
   try {
@@ -24,6 +24,9 @@ export function ShareDialog({
   isOwner,
   publishableHtml,
   hasApp,
+  isTemplate,
+  description,
+  onTemplateChange,
   onClose,
 }: {
   projectId: string
@@ -32,13 +35,19 @@ export function ShareDialog({
   /** The app as it stands, assembled for publishing (no editor instrumentation). */
   publishableHtml: () => string
   hasApp: boolean
+  /** Whether this project is currently offered as a forkable starting point. */
+  isTemplate: boolean
+  description: string | null
+  onTemplateChange: (next: { isTemplate: boolean; description: string | null }) => void
   onClose: () => void
 }) {
   const [email, setEmail] = useState('')
   const [inviting, setInviting] = useState(false)
   const [publication, setPublication] = useState<Publication | null>(null)
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState<'publish' | 'update' | 'unpublish' | null>(null)
+  const [busy, setBusy] = useState<'publish' | 'update' | 'unpublish' | 'listed' | null>(null)
+  const [tmplBusy, setTmplBusy] = useState(false)
+  const [desc, setDesc] = useState(description ?? '')
   const cardRef = useRef<HTMLDivElement>(null)
 
   const projectLink = `${location.origin}${location.pathname}?p=${projectId}`
@@ -99,6 +108,45 @@ export function ShareDialog({
       toast(e?.message || 'Could not publish this project.')
     } finally {
       setBusy(null)
+    }
+  }
+
+  // Listing is a separate call from publishing so it can be toggled without
+  // re-uploading the snapshot — the page in the gallery stays exactly the page
+  // that was published.
+  const setListed = async (next: boolean) => {
+    if (busy || !publication) return
+    setBusy('listed')
+    try {
+      const { publication: updated } = await api.publish(projectId, publishableHtml(), next)
+      setPublication(updated)
+      toast(next ? 'Listed in the public gallery' : 'Removed from the gallery — the link still works')
+    } catch (e: any) {
+      toast(e?.message || 'Could not change the gallery listing.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const saveTemplate = async (nextIsTemplate: boolean) => {
+    if (tmplBusy) return
+    setTmplBusy(true)
+    try {
+      const trimmed = desc.trim()
+      const { project } = await api.setTemplate(projectId, {
+        isTemplate: nextIsTemplate,
+        description: trimmed || null,
+      })
+      onTemplateChange({ isTemplate: !!project.isTemplate, description: project.description ?? null })
+      toast(
+        nextIsTemplate
+          ? 'Offered as a template — anyone signed in can fork it'
+          : 'No longer offered as a template'
+      )
+    } catch (e: any) {
+      toast(e?.message || 'Could not update the template setting.')
+    } finally {
+      setTmplBusy(false)
     }
   }
 
@@ -181,6 +229,23 @@ export function ShareDialog({
                   <span>{publication.views === 1 ? '1 view' : `${publication.views} views`}</span>
                   <span>updated {fmtWhen(publication.updatedAt)}</span>
                 </div>
+                {isOwner && (
+                  <label className="sh-check" title="Show this page on the Discover → Gallery tab">
+                    <input
+                      type="checkbox"
+                      checked={publication.listed}
+                      disabled={busy !== null}
+                      onChange={(e) => setListed(e.target.checked)}
+                    />
+                    <span>
+                      <b>List in the public gallery</b>
+                      <em>
+                        Off by default. The link works either way — this only decides whether the page is findable
+                        without it.
+                      </em>
+                    </span>
+                  </label>
+                )}
                 <div className="sh-actions">
                   <a className="btn ghost" href={publication.url} target="_blank" rel="noopener noreferrer">
                     Open
@@ -206,6 +271,56 @@ export function ShareDialog({
               <div className="sh-note">This project isn't published. Only its owner can publish it.</div>
             )}
             {!hasApp && isOwner && !publication && <div className="sh-note">Build something first — there's nothing to publish yet.</div>}
+          </section>
+
+          {/* ── Template ──────────────────────────────────── */}
+          <section className="sh-block">
+            <h3>
+              <Fork width={14} height={14} /> Offer as a template
+            </h3>
+            <p>
+              A template is a starting point. Anyone signed in can fork it into a project of their own — they get an
+              editable copy with its own history, and this project is never changed by them.
+            </p>
+
+            {isOwner ? (
+              <>
+                <input
+                  className="sh-url"
+                  value={desc}
+                  maxLength={200}
+                  onChange={(e) => setDesc(e.target.value)}
+                  placeholder="One line about what this template gives you"
+                  disabled={tmplBusy}
+                />
+                <div className="sh-actions">
+                  {isTemplate ? (
+                    <>
+                      <button className="btn ghost" onClick={() => saveTemplate(true)} disabled={tmplBusy}>
+                        <Spark width={14} height={14} /> {tmplBusy ? 'Saving…' : 'Save description'}
+                      </button>
+                      <button className="btn ghost danger" onClick={() => saveTemplate(false)} disabled={tmplBusy}>
+                        <Trash width={14} height={14} /> Stop offering
+                      </button>
+                    </>
+                  ) : (
+                    <button className="btn primary wide" onClick={() => saveTemplate(true)} disabled={tmplBusy || !hasApp}>
+                      <Fork width={15} height={15} /> {tmplBusy ? 'Publishing…' : 'Offer as a template'}
+                    </button>
+                  )}
+                </div>
+                {isTemplate && (
+                  <div className="sh-note ok">
+                    Listed on the <b>Discover → Templates</b> tab.
+                  </div>
+                )}
+                {!hasApp && !isTemplate && (
+                  <div className="sh-note">Build something first — an empty project makes a poor starting point.</div>
+                )}
+              </>
+            ) : (
+              <div className="sh-note">Only the project owner can offer it as a template.</div>
+            )}
           </section>
         </div>
       </div>

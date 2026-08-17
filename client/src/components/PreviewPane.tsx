@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import type * as Y from 'yjs'
 import { CodeEditor } from './CodeEditor'
 import { Cursors } from './Cursors'
-import { CodeIcon, EyeIcon, FileIcon, Pointer, Refresh, Spark } from '../icons'
+import { CodeIcon, EyeIcon, FileIcon, Play, Pointer, Refresh, Spark, Terminal } from '../icons'
 import type { CompletionRequest } from '../ghost'
 import { PICK_CANCELLED, PICK_MESSAGE, PICKED_MESSAGE, type PickedElement } from '../picker'
+import { PYTHON_STATE_MESSAGE } from '../python'
+import type { Runtime } from '../runtime'
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 
@@ -12,6 +14,8 @@ export function PreviewPane({
   tab,
   onTab,
   previewCode,
+  runtime,
+  runNonce,
   building,
   builderName,
   activeFile,
@@ -28,6 +32,15 @@ export function PreviewPane({
   tab: 'preview' | 'code'
   onTab: (t: 'preview' | 'code') => void
   previewCode: string
+  /** Which engine runs this project — decides what the left tab is and does. */
+  runtime: Runtime
+  /**
+   * Bumped on every explicit Run. The preview iframe is keyed on it, which is
+   * what makes Run *restart* a Python program rather than leaving the finished
+   * one on screen — and it is also the escape hatch from a program that hangs,
+   * since remounting the frame destroys the interpreter along with it.
+   */
+  runNonce: number
   building: boolean
   builderName?: string
   activeFile: string
@@ -41,9 +54,14 @@ export function PreviewPane({
   onPicking: (on: boolean) => void
   onPick: (el: PickedElement) => void
 }) {
+  const isPython = runtime === 'python'
   const wsRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
+  // What the Python frame last reported. It runs inside a sandbox with no
+  // same-origin access, so its state can only arrive by message — there is
+  // nothing to read out of the document.
+  const [pyState, setPyState] = useState<'running' | 'done' | 'error'>('running')
 
   // Track the workspace size so we can position normalized cursors.
   useEffect(() => {
@@ -73,18 +91,26 @@ export function PreviewPane({
         })
       } else if (d.lumen === PICK_CANCELLED) {
         onPicking(false)
+      } else if (d.lumen === PYTHON_STATE_MESSAGE) {
+        setPyState(d.state === 'error' ? 'error' : 'done')
       }
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [onPick, onPicking])
 
+  // A fresh frame is a fresh interpreter, so the reported state resets with it.
+  useEffect(() => setPyState('running'), [runNonce, previewCode])
+
   // Arm or disarm the picker. Re-sent whenever the document is replaced, since
-  // srcDoc mounts a brand-new window that has never heard from us.
+  // srcDoc mounts a brand-new window that has never heard from us. Never sent to
+  // a Python frame: there are no elements in a console to point at, and the
+  // picker script isn't in that document to receive it.
   const arm = () => {
+    if (isPython) return
     frameRef.current?.contentWindow?.postMessage({ lumen: PICK_MESSAGE, on: picking }, '*')
   }
-  useEffect(arm, [picking, previewCode])
+  useEffect(arm, [picking, previewCode, isPython])
 
   // Picking is meaningless on the code tab, and a stale armed frame would keep
   // swallowing clicks — disarm on the way out.
@@ -110,7 +136,7 @@ export function PreviewPane({
       <div className="ws-head">
         <div className="tabs">
           <button className={`tab ${tab === 'preview' ? 'active' : ''}`} onClick={() => onTab('preview')}>
-            <EyeIcon /> Preview
+            {isPython ? <Terminal /> : <EyeIcon />} {isPython ? 'Console' : 'Preview'}
           </button>
           <button className={`tab ${tab === 'code' ? 'active' : ''}`} onClick={() => onTab('code')}>
             <CodeIcon /> Code
@@ -123,28 +149,42 @@ export function PreviewPane({
           </div>
         )}
         <div className="ws-url">
-          <div className="ws-pill">
-            <svg className="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <rect x="5" y="11" width="14" height="9" rx="2" />
-              <path d="M8 11V8a4 4 0 0 1 8 0v3" />
-            </svg>
-            <span>lumen.app/preview</span>
-          </div>
+          {isPython ? (
+            <div className={`ws-pill py ${pyState}`} title="This project runs CPython compiled to WebAssembly">
+              <Terminal width={12} height={12} />
+              <span>python3 main.py</span>
+            </div>
+          ) : (
+            <div className="ws-pill">
+              <svg className="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <rect x="5" y="11" width="14" height="9" rx="2" />
+                <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+              </svg>
+              <span>lumen.app/preview</span>
+            </div>
+          )}
+          {!isPython && (
+            <button
+              className={`btn ghost icon ${picking ? 'active' : ''}`}
+              onClick={() => {
+                if (tab !== 'preview') onTab('preview')
+                onPicking(!picking)
+              }}
+              disabled={!hasApp || building}
+              title={picking ? 'Cancel — click an element to edit it' : 'Point at an element in the app to edit it'}
+              aria-label="Pick an element to edit"
+              aria-pressed={picking}
+            >
+              <Pointer width={15} height={15} />
+            </button>
+          )}
           <button
-            className={`btn ghost icon ${picking ? 'active' : ''}`}
-            onClick={() => {
-              if (tab !== 'preview') onTab('preview')
-              onPicking(!picking)
-            }}
-            disabled={!hasApp || building}
-            title={picking ? 'Cancel — click an element to edit it' : 'Point at an element in the app to edit it'}
-            aria-label="Pick an element to edit"
-            aria-pressed={picking}
+            className="btn ghost icon"
+            onClick={onRun}
+            title={isPython ? 'Run main.py again — restarts the interpreter' : 'Refresh preview'}
+            aria-label={isPython ? 'Run the program again' : 'Refresh preview'}
           >
-            <Pointer width={15} height={15} />
-          </button>
-          <button className="btn ghost icon" onClick={onRun} title="Refresh preview" aria-label="Refresh preview">
-            <Refresh width={15} height={15} />
+            {isPython ? <Play width={14} height={14} /> : <Refresh width={15} height={15} />}
           </button>
         </div>
       </div>
@@ -154,9 +194,14 @@ export function PreviewPane({
         <div style={{ position: 'absolute', inset: 0, visibility: tab === 'preview' ? 'visible' : 'hidden' }}>
           {hasApp ? (
             <iframe
+              // Keyed on the run counter so pressing Run tears the frame down and
+              // builds a new one. For the web runtime that is a plain reload; for
+              // Python it is the only way to restart an interpreter that has
+              // already finished — or to escape one that never will.
+              key={isPython ? `py-${runNonce}` : 'web'}
               ref={frameRef}
               className="preview-frame"
-              title="App preview"
+              title={isPython ? 'Python console' : 'App preview'}
               sandbox="allow-scripts allow-modals allow-popups allow-forms"
               srcDoc={previewCode}
               onLoad={arm}
@@ -164,15 +209,17 @@ export function PreviewPane({
           ) : (
             <div className="empty-stage">
               <div className="inner">
-                <div className="ill">
-                  <Spark width={26} height={26} />
-                </div>
-                <h3>Your app will appear here</h3>
-                <p>Describe what you want in the chat on the right. Lumen builds it and runs it live in this space.</p>
+                <div className="ill">{isPython ? <Terminal width={26} height={26} /> : <Spark width={26} height={26} />}</div>
+                <h3>{isPython ? 'Your program will run here' : 'Your app will appear here'}</h3>
+                <p>
+                  {isPython
+                    ? 'Describe what you want in the chat on the right. Lumen writes the Python and runs it in this console — real CPython, in your browser.'
+                    : 'Describe what you want in the chat on the right. Lumen builds it and runs it live in this space.'}
+                </p>
               </div>
             </div>
           )}
-          {picking && hasApp && (
+          {picking && hasApp && !isPython && (
             <div className="pick-hint" role="status">
               <Pointer width={13} height={13} />
               <span>Click any element to edit it</span>

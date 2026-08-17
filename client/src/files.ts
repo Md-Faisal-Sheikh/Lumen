@@ -3,8 +3,17 @@
 
 import type * as Y from 'yjs'
 import type { ZipEntry } from './zip'
+import { entryFile, type Runtime } from './runtime'
 
 export const INDEX_FILE = 'index.html'
+
+// The entry file is whatever the project's runtime runs — index.html for the
+// web, main.py for Python. It lives in the same place in the Yjs document
+// either way (the `code` Y.Text), so everything downstream of this line is
+// runtime-agnostic: the streaming writer, the version snapshots, the exporter
+// and the GitHub push all just take a path.
+export { entryFile }
+export type { Runtime }
 
 // Clean a user-typed path: forward slashes, no leading slash, no "..", sane charset.
 export function normalizePath(input: string): string | null {
@@ -26,8 +35,8 @@ export type TreeNode =
   | { type: 'file'; name: string; path: string }
 
 // Turn flat paths into a nested tree: folders first, then files, alphabetical —
-// except index.html, which is pinned to the top as the app's entry point.
-export function buildTree(paths: string[]): TreeNode[] {
+// except the entry file, which is pinned to the top as the app's starting point.
+export function buildTree(paths: string[], entry: string = INDEX_FILE): TreeNode[] {
   const root: TreeNode[] = []
   const folders = new Map<string, TreeNode[]>() // folder path -> children array
 
@@ -52,8 +61,8 @@ export function buildTree(paths: string[]): TreeNode[] {
 
   const sortLevel = (nodes: TreeNode[]) => {
     nodes.sort((a, b) => {
-      if (a.path === INDEX_FILE) return -1
-      if (b.path === INDEX_FILE) return 1
+      if (a.path === entry) return -1
+      if (b.path === entry) return 1
       if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
       return a.name.localeCompare(b.name)
     })
@@ -67,6 +76,7 @@ export function buildTree(paths: string[]): TreeNode[] {
 export function starterContent(path: string): string {
   if (/\.css$/i.test(path)) return `/* ${path} */\n`
   if (/\.(m?js|jsx|ts|tsx)$/i.test(path)) return `// ${path}\n`
+  if (/\.py$/i.test(path)) return `"""${path}"""\n\n`
   if (/\.html?$/i.test(path))
     return `<!doctype html>\n<html>\n<head>\n  <meta charset="utf-8" />\n  <title>${path}</title>\n</head>\n<body>\n\n</body>\n</html>\n`
   return ''
@@ -87,8 +97,17 @@ const FENCE_RE = /^\s*(?:```|~~~)\s*([A-Za-z0-9+#.-]*)\s*$/
 // in markdown instead, but they still split the project correctly and label
 // each block with its language. That is the same information under a different
 // name, so it is read rather than thrown away.
-function pathForLanguage(lang: string): string | null {
-  switch (lang.toLowerCase()) {
+//
+// Under the Python runtime the mapping collapses: every block is labelled
+// `python`, so the language identifies the *runtime* and not the file. Only the
+// first block can be placed with confidence, and later ones are dropped rather
+// than guessed at — the same rule web already applies to an unlabelled block.
+// This path is a fallback in any case: images are the reason it exists, and a
+// Python project cannot be built from one.
+function pathForLanguage(lang: string, runtime: Runtime): string | null {
+  const l = lang.toLowerCase()
+  if (runtime === 'python') return l === 'python' || l === 'py' ? entryFile('python') : null
+  switch (l) {
     case 'html':
     case 'htm':
       return INDEX_FILE
@@ -104,12 +123,24 @@ function pathForLanguage(lang: string): string | null {
   }
 }
 
+// Does this line plausibly open the entry file, or is it the model clearing its
+// throat? Committing to the single-document shape on "Sure! Here's the code:"
+// writes the chatter into the project and makes the fences that follow look like
+// content, so each runtime gets a shape test for its own language.
+function opensEntryFile(line: string, runtime: Runtime): boolean {
+  if (runtime !== 'python') return /^\s*</.test(line)
+  return /^\s*(?:import\s|from\s|def\s|class\s|@\w|#|"""|'''|if\s|print\s*\(|[A-Za-z_]\w*\s*[:=])/.test(line)
+}
+
 // Serialize the whole workspace in the same marker format, so a rebuild can
-// hand the model every current file to modify.
-export function serializeWorkspace(indexHtml: string, files: Record<string, string>): string {
+// hand the model every current file to modify. The entry file leads, because
+// it is the one the model is being asked to keep working.
+export function serializeWorkspace(entry: string, entryContent: string, files: Record<string, string>): string {
   const section = (path: string, content: string) => `===== FILE: ${path} =====\n${content.replace(/\s+$/, '')}\n`
-  const parts = [section(INDEX_FILE, indexHtml)]
-  for (const [path, content] of Object.entries(files)) parts.push(section(path, content))
+  const parts = [section(entry, entryContent)]
+  for (const [path, content] of Object.entries(files)) {
+    if (path !== entry) parts.push(section(path, content))
+  }
   return parts.join('\n')
 }
 
@@ -132,7 +163,12 @@ export function createBuildWriter(target: {
   append: (path: string, text: string) => void
   /** A new file section just began. */
   onFile?: (path: string) => void
+  /** Which runtime is being built for — decides the entry file and how an
+   *  unmarked or markdown-fenced answer is read. Defaults to the web runtime. */
+  runtime?: Runtime
 }): BuildWriter {
+  const runtime: Runtime = target.runtime ?? 'web'
+  const entry = entryFile(runtime)
   let carry = ''
   let current: string | null = null // null until the first marker/content arrives
   let summarySkipped = false
@@ -188,7 +224,7 @@ export function createBuildWriter(target: {
           // An unlabelled *first* block is the whole document. An unlabelled
           // later one can't be placed — appending it to whichever file happens
           // to be open would corrupt that file, so it is dropped instead.
-          const path = pathForLanguage(fence[1]) ?? (openedAny ? null : INDEX_FILE)
+          const path = pathForLanguage(fence[1], runtime) ?? (openedAny ? null : entry)
           if (path) open(path)
           else current = null
         }
@@ -203,13 +239,14 @@ export function createBuildWriter(target: {
       if (!line.trim()) return // leading blank lines belong to no file
       if (protocol === 'unknown') {
         // Still deciding. A line that isn't a marker, a fence, or the start of
-        // markup is the model clearing its throat — "Sure! Here's the page:".
-        // Committing to the single-document shape on it would write the chatter
-        // into index.html *and* make the fences that follow look like content.
-        if (!/^\s*</.test(line)) return
+        // this runtime's source is the model clearing its throat — "Sure!
+        // Here's the page:". Committing to the single-document shape on it
+        // would write the chatter into the entry file *and* make the fences
+        // that follow look like content.
+        if (!opensEntryFile(line, runtime)) return
         protocol = 'plain'
       }
-      open(INDEX_FILE) // markup with no marker and no fence: a single document
+      open(entry) // source with no marker and no fence: a single document
     }
     if (!line.trim()) {
       heldBlanks += line // flushed only if real content follows in the same file
@@ -238,6 +275,33 @@ export function createBuildWriter(target: {
       }
     },
   }
+}
+
+/**
+ * Read a marker-format workspace back into files — the inverse of
+ * `serializeWorkspace`, used to restore a version snapshot.
+ *
+ * It runs the snapshot through the *same* writer a live build streams into
+ * rather than parsing the markers a second time. That is the point: a
+ * checkpoint is a recording of exactly what the model once emitted, so if the
+ * two parsers ever disagreed, restoring a build would produce a workspace the
+ * build itself never had. Sharing the code makes that class of bug impossible
+ * instead of merely unlikely.
+ */
+export function parseWorkspace(serialized: string, runtime: Runtime = 'web'): Record<string, string> {
+  const out: Record<string, string> = {}
+  const writer = createBuildWriter({
+    runtime,
+    reset: (path) => {
+      out[path] = ''
+    },
+    append: (path, text) => {
+      out[path] = (out[path] ?? '') + text
+    },
+  })
+  writer.push(serialized)
+  writer.end()
+  return out
 }
 
 // ── Line-level edits ("change line 14 in index.html") ───────────────
@@ -326,13 +390,14 @@ export function assemblePreview(indexHtml: string, files: Record<string, string>
 // the real thing: separate files at their real paths. These build that list for
 // the ZIP writer — nothing is merged, rewritten, or flattened.
 
-// index.html first (it's the page you open), then every other file by path.
-// Sorted by code unit rather than locale so the archive is byte-deterministic.
-// Empty files are kept: a file someone created is part of their project.
-export function exportEntries(indexHtml: string, files: Record<string, string>): ZipEntry[] {
+// The entry file first (it's the one you open, or the one that runs), then
+// every other file by path. Sorted by code unit rather than locale so the
+// archive is byte-deterministic. Empty files are kept: a file someone created
+// is part of their project.
+export function exportEntries(entry: string, entryContent: string, files: Record<string, string>): ZipEntry[] {
   const entries: ZipEntry[] = []
-  if (indexHtml.trim()) entries.push({ path: INDEX_FILE, content: indexHtml })
-  for (const path of Object.keys(files).filter((p) => p !== INDEX_FILE).sort()) {
+  if (entryContent.trim()) entries.push({ path: entry, content: entryContent })
+  for (const path of Object.keys(files).filter((p) => p !== entry).sort()) {
     entries.push({ path, content: files[path] })
   }
   return entries
